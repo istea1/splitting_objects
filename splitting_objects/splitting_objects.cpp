@@ -18,7 +18,7 @@ int main()
     
     namedWindow("out", WINDOW_NORMAL);
     imshow("thresh", thresh);
-    imwrite("out.png", image_copy);
+    imshow("out", image_copy);
     waitKey(0);
 }
 

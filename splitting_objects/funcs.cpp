@@ -2,14 +2,14 @@
 
 using namespace std;
 using namespace cv;
-
+//функция по расчету угла между двумя векторами
 double angleBetween(const Point& a, const Point& b) {
 	double dotProduct = a.x * b.x + a.y * b.y;
 	double magnitudeA = std::sqrt(a.x * a.x + a.y * a.y);
 	double magnitudeB = std::sqrt(b.x * b.x + b.y * b.y);
 	return std::acos(dotProduct / (magnitudeA * magnitudeB));
 }
-
+//функция, которая проверяет слева или справа p1 от прямой p-p2
 bool classify_point_by_straight(Point p, Point p1, Point p2) {
 	Point a = p2 - p1;
 	Point b = p - p1;
@@ -24,24 +24,19 @@ bool classify_point_by_straight(Point p, Point p1, Point p2) {
 		return false;
 	}
 }
-
+//функция, которая находит угловые точки(и выпуклые и вогнутые)
 vector<Point> findCornerPoints(const std::vector<Point>& contour, double threshold1, double threshold2) {
 	vector<Point> corners;
 
 	for (int i = 0; i < contour.size(); ++i) {
-		// Векторы от i-1 до i и от i до i+1
 		Point v1 = { contour[i].x - contour[i - 1].x, contour[i].y - contour[i - 1].y };
 		Point v2 = { contour[i + 1].x - contour[i].x, contour[i + 1].y - contour[i].y };
 
-		// Нормализуем векторы
 		double magnitudeV1 = std::sqrt(v1.x * v1.x + v1.y * v1.y);
 		double magnitudeV2 = std::sqrt(v2.x * v2.x + v2.y * v2.y);
 
-		// Проверяем, чтобы длины векторов не были нулевыми
 		if (magnitudeV1 > 0 && magnitudeV2 > 0) {
-			// Вычисляем угол
 			double angle = angleBetween(v1, v2);
-			// Если угол больше заданного порога, добавляем точку в список угловых
 			if (angle > threshold1 and angle < threshold2) {
 				corners.push_back(contour[i]);
 			}
@@ -50,10 +45,10 @@ vector<Point> findCornerPoints(const std::vector<Point>& contour, double thresho
 
 	return corners;
 }
-
+//функция, которая выбирает из предыдущей вогнутые точки
 vector<Point> cpe(vector<Point> c) {
 	vector<Point> cpc;
-	double eps = 0.001;
+	//double eps = 0.001;
 	double a1ths = 0.6, a2ths = 2.8;
 	int ki = 1;
 	int j = 0;
@@ -77,7 +72,7 @@ vector<Point> cpe(vector<Point> c) {
 	}
 	return cpc;
 }
-
+//функция, находящая вогнутые точки из картинки(в чем и заключается задача)
 vector<vector<Point>> find_all_concave_points(Mat im, double approx_thresh, int binary_thresh) {
 	Mat im_gray;
 	cvtColor(im, im_gray, COLOR_BGR2GRAY);
@@ -97,7 +92,7 @@ vector<vector<Point>> find_all_concave_points(Mat im, double approx_thresh, int 
 
 	return contours;
 }
-
+//функция по рисованию вогнутых точек на картинке зеленым цветом
 Mat draw_points_on_picture(Mat im, double approx_thresh, int binary_thresh) {
 	vector<vector<Point>> cps = find_all_concave_points(im, approx_thresh, binary_thresh);
 	for (int i = 0; i < cps.size(); i++) {
