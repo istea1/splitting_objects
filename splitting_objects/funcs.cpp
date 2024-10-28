@@ -25,7 +25,7 @@ bool classify_point_by_straight(Point p, Point p1, Point p2) {
 	}
 }
 //функция, которая находит угловые точки(и выпуклые и вогнутые)
-vector<Point> findCornerPoints(const std::vector<Point>& contour, double threshold1, double threshold2) {
+vector<Point> find_corner_points(const std::vector<Point>& contour, double threshold1, double threshold2) {
 	vector<Point> corners;
 
 	for (int i = 0; i < contour.size(); ++i) {
@@ -52,19 +52,15 @@ vector<Point> cpe(vector<Point> c) {
 	double a1ths = 0.6, a2ths = 2.8;
 	int ki = 1;
 	int j = 0;
-	vector<Point> mcps = findCornerPoints(c, a1ths, a2ths);
+	vector<Point> mcps = find_corner_points(c, a1ths, a2ths);
+	if (c.size() == 1) {
+		return vector<Point>();
+	}
 	for (int i = 0; i < c.size(); i++) {
-		if (c.size() == 1) {
-			return vector<Point>();
-		}
-		int pre = i - ki, next = (i + ki) % (c.size() - 1);
-		if (pre < 0) {
-			pre = c.size() - ki;
-		}
-		
-		if (c[i] == mcps[j]) {
-			if (classify_point_by_straight(c[pre], c[i], c[next]) == false) {
-				cpc.push_back(c[i]);
+		int pre = i, now = (i + 1) % c.size(), next = (i + 2) % c.size();		
+		if (c[now] == mcps[j]) {
+			if (classify_point_by_straight(c[pre], c[now], c[next]) == false) {
+				cpc.push_back(c[now]);
 			}
 			j += 1;
 
@@ -92,9 +88,11 @@ vector<vector<Point>> find_all_concave_points(Mat im, double approx_thresh, int 
 
 	return contours;
 }
+
+
+
 //функция по рисованию вогнутых точек на картинке зеленым цветом
-Mat draw_points_on_picture(Mat im, double approx_thresh, int binary_thresh) {
-	vector<vector<Point>> cps = find_all_concave_points(im, approx_thresh, binary_thresh);
+Mat draw_points_on_picture(Mat im, vector<vector<Point>> cps) {
 	for (int i = 0; i < cps.size(); i++) {
 		for (int j = 0; j < cps[i].size(); j++) {
 			im.at<Vec3b>(cps[i][j].y, cps[i][j].x) = Vec3b(0, 255, 0);

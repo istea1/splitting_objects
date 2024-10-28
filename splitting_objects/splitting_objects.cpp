@@ -14,7 +14,8 @@ int main()
     cvtColor(im, im_gray, COLOR_BGR2GRAY);
     Mat thresh;
     threshold(im_gray, thresh, 25, 255, THRESH_BINARY);
-    Mat image_copy = draw_points_on_picture(im, 1, 25);
+    vector<vector<Point>> cps = find_all_concave_points(im, 1, 25);
+    Mat image_copy = draw_points_on_picture(im, cps);
     
     namedWindow("out", WINDOW_NORMAL);
     imshow("thresh", thresh);

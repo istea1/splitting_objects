@@ -13,8 +13,8 @@ vector<Point> cpe(vector<Point> c);
 
 bool classify_point_by_straight(Point p, Point p1, Point p2);
 
-vector<Point> findCornerPoints(const std::vector<Point>& contour, double threshold1, double threshold2);
+vector<Point> find_corner_points(const std::vector<Point>& contour, double threshold1, double threshold2);
 
 vector<vector<Point>> find_all_concave_points(Mat im, double approx_thresh, int binary_thresh);
 
-Mat draw_points_on_picture(Mat im, double approx_thresh, int binary_thresh);
+Mat draw_points_on_picture(Mat im, vector<vector<Point>> cps);
