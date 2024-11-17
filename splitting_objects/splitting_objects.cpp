@@ -9,17 +9,9 @@ using namespace cv;
 
 int main()
 {
-    Mat im, im_gray;
-    im = imread("img_test2.jpg");
-    cvtColor(im, im_gray, COLOR_BGR2GRAY);
-    Mat thresh;
-    threshold(im_gray, thresh, 25, 255, THRESH_BINARY);
-    vector<vector<Point>> cps = find_all_concave_points(im, 1, 25);
-    Mat image_copy = draw_points_on_picture(im, cps);
-    
-    namedWindow("out", WINDOW_NORMAL);
-    imshow("thresh", thresh);
-    imshow("out", image_copy);
-    waitKey(0);
+    Mat im = imread("img_test5.png");
+    main_func(im, 3, 40);
+    //imshow("f", im);
+    //waitKey(0);
 }
 
