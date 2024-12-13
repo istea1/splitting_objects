@@ -116,11 +116,13 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>C:\Users\egor\Documents\eigen-3.4.0;C:\cv\splitting_objects\splitting_objects\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>C:\cv\opencv\build\x64\vc16\lib\opencv_world490.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>C:\cv\opencv\build\x64\vc16\lib\opencv_world490.lib;C:\cv\splitting_objects\splitting_objects\lib\blas.lib;C:\cv\splitting_objects\splitting_objects\lib\blasd.lib;C:\cv\splitting_objects\splitting_objects\lib\lapack.lib;C:\cv\splitting_objects\splitting_objects\lib\lapackd.lib;C:\cv\splitting_objects\splitting_objects\lib\libf2c.lib;C:\cv\splitting_objects\splitting_objects\lib\libf2cd.lib;C:\cv\splitting_objects\splitting_objects\lib\tmglib.lib;C:\cv\splitting_objects\splitting_objects\lib\tmglibd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:\cv\splitting_objects\splitting_objects\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -131,20 +133,24 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>C:\Users\egor\Documents\eigen-3.4.0;C:\cv\splitting_objects\splitting_objects\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>C:\cv\opencv\build\x64\vc16\lib\opencv_world490.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>C:\cv\opencv\build\x64\vc16\lib\opencv_world490.lib;C:\cv\splitting_objects\splitting_objects\lib\blas.lib;C:\cv\splitting_objects\splitting_objects\lib\blasd.lib;C:\cv\splitting_objects\splitting_objects\lib\lapack.lib;C:\cv\splitting_objects\splitting_objects\lib\lapackd.lib;C:\cv\splitting_objects\splitting_objects\lib\libf2c.lib;C:\cv\splitting_objects\splitting_objects\lib\libf2cd.lib;C:\cv\splitting_objects\splitting_objects\lib\tmglib.lib;C:\cv\splitting_objects\splitting_objects\lib\tmglibd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:\cv\splitting_objects\splitting_objects\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Ellipse.cpp" />
     <ClCompile Include="funcs.cpp" />
     <ClCompile Include="splitting_objects.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Ellipse.h" />
     <ClInclude Include="funcs.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -3,14 +3,22 @@
 using namespace std;
 using namespace cv;
 
-vector<vector<Point>> find_contours(Mat im, int binary_thresh) {
+void make_data(vector<Point> points) {
+	ofstream file;
+	file.open("file.txt");
+	for (int i = 0; i < points.size(); i++) {
+		file << points[i].x << " " << points[i].y << "\n";
+	}
+}
+
+vector<vector<Point>> find_contours(Mat im, int binary_thresh, int method) {
 	Mat im_gray;
 	cvtColor(im, im_gray, COLOR_BGR2GRAY);
 	Mat thresh;
 	threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
 	vector<vector<Point>> contours;
 	vector<Vec4i> hierarchy;
-	findContours(thresh, contours, hierarchy, RETR_TREE, 3);
+	findContours(thresh, contours, hierarchy, RETR_TREE, method);
 	return contours;
 }
 
@@ -87,7 +95,6 @@ vector<Point> cpe(vector<Point> c) {
 	return cpc;
 }
 
-
 vector<vector<Point>> make_segments_of_contour(vector<Point> c, vector<Point> cps) {
 	vector<vector<Point>> segments(1);
 	if (cps.empty()) {
@@ -114,170 +121,38 @@ vector<vector<Point>> make_segments_of_contour(vector<Point> c, vector<Point> cp
 	return segments;
 }
 
-vector<Point> ellipse_fitting(RotatedRect ellipse) {
-	std::vector<cv::Point> integerPoints;
-
-	// Получаем параметры эллипса
-	cv::Point2f center = ellipse.center;
-	cv::Size2f size = ellipse.size;
-	float angle = ellipse.angle * CV_PI / 180; // Угол в радианах
-
-	float a = size.width / 2; // Полуось по X
-	float b = size.height / 2; // Полуось по Y
-	int numPoints = 100;
-	// Генерируем точки вдоль эллипса
-	for (int i = 0; i < numPoints; ++i) {
-		// Параметр t от 0 до 2π
-		float t = (float)i / numPoints * 2 * CV_PI;
-
-		// Параметрическое уравнение эллипса
-		float x = a * cos(t);
-		float y = b * sin(t);
-
-		// Применяем вращение к точкам
-		float rotatedX = center.x + (x * cos(angle) - y * sin(angle));
-		float rotatedY = center.y + (x * sin(angle) + y * cos(angle));
-
-		// Преобразуем в целые координаты
-		integerPoints.push_back(cv::Point(static_cast<int>(std::round(rotatedX)), static_cast<int>(std::round(rotatedY))));
-	}
-
-	return integerPoints;
-}
-
-void ellipses_fitting(vector<vector<Point>>& segments, vector<RotatedRect>& Ellipse_Rects,
-	vector<vector<Point>>& ellipse_contours) {
+void ellipses_selection(const vector<vector<Point>>& segments, 
+	vector<vector<Point>> &for_refine, 
+	vector<Ellipse>& for_combine) {
 	for (int i = 0; i < segments.size(); i++) {
-		if (segments[i].size() >= 5) {
-			RotatedRect n_e = fitEllipse(segments[i]);
-			Ellipse_Rects[i] = n_e;
-			ellipse_contours[i] = ellipse_fitting(n_e);
-		}
-		else {
-			Ellipse_Rects[i] = RotatedRect();
-			ellipse_contours[i] = vector<Point>();
-		}
+		Ellipse ellipse = Ellipse(segments[i]);
+		if (is_ellipse_for_combine(ellipse)) for_combine.push_back(ellipse);
+		else for_refine.push_back(segments[i]);
 	}
-}
-
-Mat find_ellipse_coefficients(const vector<Point>& points) {
-	// Создаем матрицу M и вектор b
-	cv::Mat M(points.size(), 6, CV_64F);
-	cv::Mat b(points.size(), 1, CV_64F);
-
-	for (size_t i = 0; i < points.size(); ++i) {
-		double x = points[i].x;
-		double y = points[i].y;
-
-		M.at<double>(i, 0) = x * x;  // A
-		M.at<double>(i, 1) = x * y;  // B
-		M.at<double>(i, 2) = y * y;  // C
-		M.at<double>(i, 3) = x;      // D
-		M.at<double>(i, 4) = y;      // E
-		M.at<double>(i, 5) = 1;      // F
-	}
-
-	// Решаем систему уравнений M * [A, B, C, D, E, F] = 0
-	cv::Mat AT = M.t();
-	cv::Mat ATA = AT * M;
-	cv::Mat ATb = -AT * b;  // Поскольку мы ищем уравнение вида Ax=0, нам нужен -AT*b
-
-	// Находим псевдообратную матрицу
-	cv::Mat coefficients;
-	cv::solve(ATA, ATb, coefficients, cv::DECOMP_SVD);
-	return coefficients;
 }
 
 double find_dis_segment_to_ellipse(vector<Point> segment, Mat coefficents) {
 	double dis = 0;
-	for (int i = 0; i < segment.size(); i++) {
-		int x = segment[i].x;
-		int y = segment[i].y;
-		double A = coefficents.at<double>(0);
-		double B = coefficents.at<double>(1);
-		double C = coefficents.at<double>(2);
-		double D = coefficents.at<double>(3);
-		double E = coefficents.at<double>(4);
-		double F = coefficents.at<double>(5);
-		dis += abs(1 - (A * x * x + B * x * y + C * y * y + D * x + E * y + F));
-	}
-	return dis / segment.size();
-}
-
-double calculateEratio(Mat coefficents) {
 	double A = coefficents.at<double>(0);
 	double B = coefficents.at<double>(1);
 	double C = coefficents.at<double>(2);
 	double D = coefficents.at<double>(3);
 	double E = coefficents.at<double>(4);
 	double F = coefficents.at<double>(5);
-	double determinant = B * B - 4 * A * C;
-
-	if (determinant <= 0) {
-		return 1.1;
+	for (Point p: segment) {
+		dis += abs(A * p.x * p.x + B * p.x * p.y + C * p.y * p.y + D * p.x + E * p.y + F);
 	}
-
-	// Параметры
-	double a = std::sqrt(2 * (A * E * E + C * D * D - B * D * E) / (determinant * (A + C)));
-	double b = std::sqrt(2 * (A * E * E + C * D * D - B * D * E) / (determinant * (A + C) + 2 * sqrt(determinant)));
-
-	// Длины больших и малых осей
-	double majorAxis = 2 * std::max(a, b);
-	double minorAxis = 2 * std::min(a, b);
-	return minorAxis / majorAxis;
+	dis = dis / segment.size();
+	return dis;
 }
 
-double calculate_minorAxis(Mat coefficents) {
-	double A = coefficents.at<double>(0);
-	double B = coefficents.at<double>(1);
-	double C = coefficents.at<double>(2);
-	double D = coefficents.at<double>(3);
-	double E = coefficents.at<double>(4);
-	double F = coefficents.at<double>(5);
-	double determinant = B * B - 4 * A * C;
-
-	if (determinant <= 0) {
-		throw std::invalid_argument("Уравнение не описывает действительный эллипс.");
-	}
-
-	// Параметры
-	double a = std::sqrt(2 * (A * E * E + C * D * D - B * D * E) / (determinant * (A + C)));
-	double b = std::sqrt(2 * (A * E * E + C * D * D - B * D * E) / (determinant * (A + C) + 2 * sqrt(determinant)));
-
-	// Длины больших и малых осей
-	double minorAxis = 2 * std::min(a, b);
-	return minorAxis;
-}
-
-double calculate_majorAxis(Mat coefficents) {
-	double A = coefficents.at<double>(0);
-	double B = coefficents.at<double>(1);
-	double C = coefficents.at<double>(2);
-	double D = coefficents.at<double>(3);
-	double E = coefficents.at<double>(4);
-	double F = coefficents.at<double>(5);
-	double determinant = B * B - 4 * A * C;
-
-	if (determinant <= 0) {
-		throw std::invalid_argument("Уравнение не описывает действительный эллипс.");
-	}
-
-	// Параметры
-	double a = std::sqrt(2 * (A * E * E + C * D * D - B * D * E) / (determinant * (A + C)));
-	double b = std::sqrt(2 * (A * E * E + C * D * D - B * D * E) / (determinant * (A + C) + 2 * sqrt(determinant)));
-
-	// Длины больших и малых осей
-	double majorAxis = 2 * std::max(a, b);
-	return majorAxis;
-}
-
-bool is_ellipse_for_combine(RotatedRect EllipseRect, vector<Point> ellipse_contour, vector<Point> segment) {
-	double disTh = 3;
+bool is_ellipse_for_combine(Ellipse ellipse) {
+	double disTh = 0.035;
 	double eTh = 0.333;
-	if (ellipse_contour.size() >= 5) {
-		Mat ellipse_coefficents = find_ellipse_coefficients(ellipse_contour);
-
-		return (find_dis_segment_to_ellipse(segment, ellipse_coefficents) < disTh and calculateEratio(ellipse_coefficents) > eTh);
+	if (ellipse.contour.size() >= 5) {
+		/*cout << ellipse.Eratio << "\n";
+		cout << find_dis_segment_to_ellipse(ellipse.self_segment, ellipse.coefficents) << "\n";*/
+		return (find_dis_segment_to_ellipse(ellipse.self_segment, ellipse.coefficents) <= disTh and ellipse.Eratio >= eTh);
 	}
 	else {
 		return false;
@@ -285,75 +160,98 @@ bool is_ellipse_for_combine(RotatedRect EllipseRect, vector<Point> ellipse_conto
 	
 }
 
-void combine_ellipses(vector<RotatedRect>& Ellipse_Rects, vector<vector<Point>>& ellipse_contours,
-	vector<vector<Point>>& segments) {
-	int i = 0;
+void combine_ellipses(vector<Ellipse>& ellipses) {
 	double dminTh = 10;
-	double eps = 1;
-	while (i < Ellipse_Rects.size()) {
-		int j = i + 1;
-		while (j < Ellipse_Rects.size()) {
-			vector<Point> Nl;
-			vector<Point> Li = segments[i];
-			vector<Point> Lj = segments[j];
-			vector<Point> Ei = ellipse_contours[i];
-			vector<Point> Ej = ellipse_contours[j];
-			Nl = Li;
-			vector<Point>::iterator iter_paste;
-			iter_paste = Lj.begin();
-			Nl.insert(iter_paste, Lj.begin(), Lj.end());
-			if (Li.size() >= 5 and Lj.size() >= 5) {
-				RotatedRect ellipse = fitEllipse(Nl);
-				RotatedRect ellipsei = Ellipse_Rects[i];
-				RotatedRect ellipsej = Ellipse_Rects[j];
+	double eps = 0.4;
+	for(int i = 0; i < ellipses.size(); i++) {
+		for (int j = i + 1; j < ellipses.size(); j++) {
 
-				vector<Point> Eij = ellipse_fitting(ellipse);
+			vector<Point> Nl;
+			vector<Point> Li = ellipses[i].self_segment;
+			vector<Point> Lj = ellipses[j].self_segment;
+			vector<Point2f> Ei = ellipses[i].contour;
+			vector<Point2f> Ej = ellipses[j].contour;
+
+			Nl = Li;
+			for (int k = 0; k < Lj.size(); k++) {
+				Nl.push_back(Lj[k]);
+			}
+
+			if (Li.size() >= 5 and Lj.size() >= 5) {
+				Ellipse new_ellipse = Ellipse(Nl);
+
+				Ellipse ellipsei = ellipses[i];
+				Ellipse ellipsej = ellipses[j];
+
+				vector<Point2f> Eij = new_ellipse.contour;
 				double dist1 = sqrt(
-					(ellipse.center.x - ellipsei.center.x) * (ellipse.center.x - ellipsei.center.x) +
-					(ellipse.center.y - ellipsei.center.y) * (ellipse.center.y - ellipsei.center.y));
+					(new_ellipse.center.x - ellipsei.center.x) * (new_ellipse.center.x - ellipsei.center.x) +
+					(new_ellipse.center.y - ellipsei.center.y) * (new_ellipse.center.y - ellipsei.center.y));
 				double dist2 = sqrt(
-					(ellipse.center.x - ellipsej.center.x) * (ellipse.center.x - ellipsej.center.x) +
-					(ellipse.center.y - ellipsej.center.y) * (ellipse.center.y - ellipsej.center.y));
+					(new_ellipse.center.x - ellipsej.center.x) * (new_ellipse.center.x - ellipsej.center.x) +
+					(new_ellipse.center.y - ellipsej.center.y) * (new_ellipse.center.y - ellipsej.center.y));
 				double dist3 = sqrt(
 					(ellipsei.center.x - ellipsej.center.x) * (ellipsei.center.x - ellipsej.center.x) +
 					(ellipsei.center.y - ellipsej.center.y) * (ellipsei.center.y - ellipsej.center.y));
+				
 				bool case1 = ((dist1 > dminTh) and (dist2 > dminTh) and (dist3 > 2.5 * dminTh));
-				Mat Ei_coefs = find_ellipse_coefficients(Ei);
-				Mat Ej_coefs = find_ellipse_coefficients(Ej);
-				double minA1 = calculate_minorAxis(Ei_coefs);
-				double minA2 = calculate_minorAxis(Ej_coefs);
-				double maxA1 = calculate_majorAxis(Ei_coefs);
-				double maxA2 = calculate_majorAxis(Ej_coefs);
+				Mat Ei_coefs = ellipsei.coefficents;
+				Mat Ej_coefs = ellipsej.coefficents;
+				double minA1 = ellipsei.minorAxisL;
+				double minA2 = ellipsej.minorAxisL;
+				double maxA1 = ellipsei.majorAxisL;
+				double maxA2 = ellipsej.majorAxisL;
 				bool case2 = (
 					(minA1 < dminTh) and
 					(minA2 < dminTh) and
 					(abs(minA1 - minA2) < 0.05 * dminTh) and
 					(abs(maxA1 - maxA2) < dminTh));
 				bool case3 = 
-					abs(find_dis_segment_to_ellipse(Nl, find_ellipse_coefficients(Eij)) - 
+					abs(find_dis_segment_to_ellipse(Nl, new_ellipse.coefficents) - 
 					0.5 * (find_dis_segment_to_ellipse(Li, Ei_coefs) + find_dis_segment_to_ellipse(Lj, Ej_coefs)))
 					<= eps;
-				if (case1 and not(case2 or case3)) {
+				if (case1 and (not case2 or not case3)) {
 					continue;
 				}
 				else if (case2 or case3) {
-					Ellipse_Rects[i] = ellipse;
-					ellipse_contours[i] = Eij;
-					segments[i] = Nl;
-					Ellipse_Rects.erase(Ellipse_Rects.begin() + j);
-					ellipse_contours.erase(ellipse_contours.begin() + j);
-					segments.erase(segments.begin() + j);
+					ellipses[i] = new_ellipse;
+					ellipses.erase(ellipses.begin() + j);
 					i = 0;
 					break;
 				}
+				cout << "a\n";
+
 			}
 		}
 	}
 }
 
-void refine_ellipses(vector<RotatedRect>& Ellipse_Rects, vector<vector<Point>>& ellipse_contours,
-	vector<vector<Point>>& segments) {
-
+void refine_ellipses(vector<vector<Point>> refine_segments, vector<Ellipse>& ellipses) {
+	double disThRe = 0.114;
+	for (int i = 0; i < refine_segments.size(); i++) {
+		double mn_dist = INFINITY;
+		Ellipse best_ellipse = Ellipse(vector<Point>());
+		int index = 0;
+		for (int j = 0; j < ellipses.size(); j++) {
+			vector<Point> new_segment = ellipses[j].self_segment;
+			for (Point p : refine_segments[i]) {
+				new_segment.push_back(p);
+			}
+			Ellipse new_ellipse = Ellipse(new_segment);
+			double dist = find_dis_segment_to_ellipse(new_segment, new_ellipse.coefficents);
+			if (dist < mn_dist) {
+				mn_dist = dist;
+				best_ellipse = new_ellipse;
+				index = j;
+			}
+		}
+		if (mn_dist < disThRe) {
+			ellipses[index] = best_ellipse;
+		}
+		else {
+			ellipses.push_back(Ellipse(refine_segments[i]));
+		}
+	}
 }
 
 //функция, находящая вогнутые точки из картинки(в чем и заключается задача)
@@ -367,20 +265,29 @@ vector<vector<Point>> find_all_concave_points(Mat im, double approx_thresh, int 
 	findContours(thresh, contours, hierarchy, RETR_TREE, 3);
 	for (int i = 0; i < contours.size(); i++) {
 		vector<Point> now_contour;
+		vector<Point> c1 = contours[i];
 		approxPolyDP(contours[i], now_contour, approx_thresh, true);
-
-		vector<RotatedRect> Ellipse_Rects;
+		if (i == 1) {
+			contours = vector<vector<Point>>(1);
+			contours[0] = make_segments_of_contour(c1, cpe(now_contour))[4];
+		}
 	}
 
 
 	return contours;
 }
 
-Mat draw_ellipses(Mat im, vector<vector<vector<Point>>> ellipses) {
+Mat draw_ellipses(Mat im, vector<vector<Ellipse>> ellipses) {
+	cout << im.rows << " " << im.cols << "\n";
 	for (int i = 0; i < ellipses.size(); i++) {
 		for (int j = 0; j < ellipses[i].size(); j++) {
-			for (int k = 0; k < ellipses[i][j].size(); k++) {
-				im.at<Vec3b>(ellipses[i][j][k].y, ellipses[i][j][k].x) = Vec3b(0, 255, 0);
+			for (Point2f p:ellipses[i][j].contour) {
+				int y = p.y;
+				int x = p.x;
+				//cout << x << " " << y << "\n";
+				if (y > 0 and x > 0 and y < im.rows and x < im.cols) {
+					im.at<Vec3b>(y, x) = Vec3b(0, 255, 0);
+				}
 			}
 		}
 	}
@@ -397,59 +304,31 @@ Mat draw_points_on_picture(Mat im, vector<vector<Point>> cps) {
 	return im;
 }
 
-void main_func(Mat im, float approx_thresh, int binary_thresh) {
-	vector<vector<Point>> contours = find_contours(im, binary_thresh);
-	vector<vector<Point>> cps = find_all_concave_points(im, approx_thresh, binary_thresh);
-	vector<vector<vector<Point>>> ellipses;
+vector<vector<Ellipse>> main_func(Mat im, float approx_thresh, int binary_thresh) {
+	Mat im_gray;
+	cvtColor(im, im_gray, COLOR_BGR2GRAY);
+	Mat thresh;
+	threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
+	vector<vector<Point>> contours = find_contours(im, binary_thresh, 3);
+	vector<vector<Point>> contours_start = find_contours(im, binary_thresh, 1);
+	//vector<vector<Point>> cps = find_all_concave_points(im, approx_thresh, binary_thresh);
+	vector<vector<Point>> cps;
+	vector<vector<Ellipse>> all_ellipses;
 	vector<vector<vector<Point>>> segments;
 	for (int i = 0; i < contours.size(); i++) {
 		vector<Point> now_contour = contours[i];
+		vector<Point> c1 = contours_start[i];
 		approxPolyDP(contours[i], now_contour, approx_thresh, true);
-		vector<vector<Point>> segments = make_segments_of_contour(contours[i], cpe(now_contour));
-		vector<RotatedRect> Ellipse_Rects(segments.size());
-		vector<vector<Point>> ellipse_contours(segments.size());
-		vector<vector<Point>> segments_combine;
-		vector<RotatedRect> Ellipse_Rects_combine;
-		vector<vector<Point>> ellipse_contours_combine;
-		vector<vector<Point>> segments_refine;
-		vector<RotatedRect> Ellipse_Rects_refine;
-		vector<vector<Point>> ellipse_contours_refine;
-		ellipses_fitting(segments, Ellipse_Rects, ellipse_contours);
-		for (int j = 0; j < segments.size(); j++) {
-			if (is_ellipse_for_combine(Ellipse_Rects[j], ellipse_contours[j], segments[j])) {
-				Ellipse_Rects_combine.push_back(Ellipse_Rects[j]);
-				segments_combine.push_back(segments[j]);
-				ellipse_contours_combine.push_back(ellipse_contours[j]);
-			}
-			else {
-				Ellipse_Rects_refine.push_back(Ellipse_Rects[j]);
-				segments_refine.push_back(segments[j]);
-				ellipse_contours_refine.push_back(ellipse_contours[j]);
-
-			}
-
-
-		}
-		cout << "a\n";
-
-		combine_ellipses(Ellipse_Rects_combine, ellipse_contours_combine, segments_combine);
-		refine_ellipses(Ellipse_Rects_refine, ellipse_contours_refine, segments_refine);
-		ellipse_contours = ellipse_contours_combine;
-		for (int j = 0; j < ellipse_contours_refine.size(); j++) {
-			ellipse_contours.push_back(ellipse_contours_refine[j]);
-		}
-		ellipses.push_back(ellipse_contours);
+		vector<vector<Point>> segments = make_segments_of_contour(c1, cpe(now_contour));
+		cps.push_back(cpe(now_contour));
+		vector<Ellipse> for_combine;
+		vector<vector<Point>> for_refine;
+		vector<Ellipse> ellipses;
+		ellipses_selection(segments, for_refine, for_combine);
+		combine_ellipses(for_combine);
+		refine_ellipses(for_refine, for_combine);
+		all_ellipses.push_back(for_combine);
 
 	}
-
-	//Mat img_contours = draw_points_on_picture(im.clone(), contours);
-	Mat image_copy = draw_ellipses(im.clone(), ellipses);
-	//Mat cps_img = draw_points_on_picture(im, cps);
-	namedWindow("out", WINDOW_NORMAL);
-	//namedWindow("cps", WINDOW_NORMAL);
-	//namedWindow("cntrs", WINDOW_NORMAL);
-	//imshow("cntrs", img_contours);
-	//imshow("cps", cps_img);
-	imshow("out", image_copy);
-	waitKey(0);
+	return all_ellipses;
 }
