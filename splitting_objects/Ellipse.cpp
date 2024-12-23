@@ -23,12 +23,11 @@ void print_eigmat(Eigen::MatrixXcd mat) {
 
 Ellipse::Ellipse(vector<Point> segment) {
 	self_segment = segment;
-	if (segment.size() >= 5) {
-		calculate_coefs();
-		make_self_contour();
-	}
+	calculate_coefs();
+	make_self_contour();
 }
 void Ellipse::calculate_coefs() {
+	//cout << self_segment.size() << "\n";
 	Mat XY = Mat(self_segment.size(), 2, CV_64F);
 	int i = 0;
 	double cx = 0, cy = 0;
@@ -63,7 +62,6 @@ void Ellipse::calculate_coefs() {
 	Mat S3 = D2.t() * D2;  // D2' * D2
 	// 4. Вычисление T
 	Mat T = -S3.inv() * S2.t();  // -inv(S3) * S2'
-
 	// 5. Создание матрицы M
 	Mat M = S1 + S2 * T;
 	// 6. Подготовка M в требуемом формате
@@ -107,15 +105,18 @@ void Ellipse::calculate_coefs() {
 	Mat A1;
 	Mat cond = 4 * evec.row(0).mul(evec.row(2)) - evec.row(1).mul(evec.row(1));
 	//print_mat(cond);
+	int times = 0;
 	for (int i = 0; i < cond.cols; i++) {
 		if (cond.at<double>(0, i) > 0) {
 			A1.push_back(evec.col(i));
+			times += 1;
 		}
 	}
-	//print_mat(A1);
 	// 9. Создание A
+	cout << "s\n";
 	Mat A = A1;
-	Mat TA1 = T * A1;
+	print_mat(A1);
+	Mat TA1 = T * A;
 
 	for (int i = 0; i < A1.rows; i++) {
 		A.push_back(TA1.row(i));
@@ -130,9 +131,12 @@ void Ellipse::calculate_coefs() {
 	A.at<double>(3, 0) = A3;
 	A.at<double>(4, 0) = A4;
 	A.at<double>(5, 0) = A5;
+	cout << "f\n";
 	// Normalize A
 	//A = A / norm(A);
 	coefficents = A / norm(A);
+	//print_mat(A1);
+	
 }
 void Ellipse::make_self_contour() {
 	double A = coefficents.at<double>(0);

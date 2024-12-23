@@ -31,8 +31,8 @@ void refine_ellipses(vector<vector<Point>> refine_segments, vector<Ellipse>& ell
 
 vector<vector<Ellipse>> main_func(Mat im, float approx_thresh, int binary_thresh);
 
-Mat draw_points_on_picture(Mat im, vector<vector<Point>> cps);
+void draw_points_on_picture(Mat &im, vector<vector<Point>> cps);
 
 Mat draw_ellipses(Mat im, vector<vector<Ellipse>> ellipses);
 
-
+Mat prepare_im(Mat im_binary);

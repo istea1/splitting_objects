@@ -9,8 +9,10 @@ using namespace cv;
 
 int main(int argc, char** args)
 {
-    Mat im = imread(args[1]);
-    vector<vector<Ellipse>> ellipses = main_func(im, 3, 55);
+	//camera_2_2024-02-01_13-36-59_725.png
+	//N009.jpg
+    Mat im = imread("camera_2_2024-02-01_13-36-59_725.png");
+    vector<vector<Ellipse>> ellipses = main_func(im, 3, 50);
 
 	//Mat img_contours = draw_points_on_picture(im.clone(), contours);
 	Mat image_copy = draw_ellipses(im.clone(), ellipses);
