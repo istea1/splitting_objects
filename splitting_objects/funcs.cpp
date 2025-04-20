@@ -1,33 +1,76 @@
 ﻿#include "funcs.h"
 
-using namespace std;
 using namespace cv;
+using namespace std;
 
-void make_data(vector<Point> points) {
-	ofstream file;
-	file.open("file.txt");
-	for (int i = 0; i < points.size(); i++) {
-		file << points[i].x << " " << points[i].y << "\n";
+
+vector <vector<vector<Point>>> contour_processing_return_segments(Mat im, int binary_thresh, int method_1, int method_2, float approx_thresh) {
+	Mat im_gray(im.rows, im.cols, CV_8U);
+	cvtColor(im, im_gray, COLOR_BGR2GRAY);
+	Mat thresh;
+	threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
+	vector<vector<Point>> contours;
+	vector<vector<Point>> contours_start;
+	vector<Vec4i> hierarchy;
+	vector<Vec4i> hierarchy_start;
+	findContours(thresh, contours, hierarchy, RETR_TREE, method_1);
+	findContours(thresh, contours_start, hierarchy_start, RETR_TREE, method_2);
+	vector<vector<vector<Point>>> segments(contours.size());
+	int i = 0;
+	auto its = segments.begin();
+	for (auto it = contours.begin(); it != contours.end(); it++) {
+		vector<Point> now_contour = contours[i];
+		vector<Point> c1 = contours_start[i];
+		approxPolyDP(contours[i], now_contour, approx_thresh, true);
+		vector<vector<Point>> i_segments = make_segments_of_contour(c1, cpe(now_contour));
+		int ifat = hierarchy[i][3];
+		if (ifat != -1) {
+			contours[ifat].insert(contours[ifat].end(), contours[i].begin(), contours[i].end());
+			segments[ifat].insert(segments[ifat].end(), i_segments.begin(), i_segments.end());
+			segments.erase(its);
+			contours.erase(it);
+			its--;
+			it--;
+			i--;
+		}
+		i++;
+		its++;
 	}
+	return segments;
 }
+
 
 vector<vector<Point>> find_contours(Mat im, int binary_thresh, int method) {
 	Mat im_gray(im.rows, im.cols, CV_8U);
-	for (int i = 0; i < im.rows; i++) {
-		for (int j = 0; j < im.cols; j++) {
-			int n = (int(im.at<Vec3b>(i, j)[0])
-				+ int(im.at<Vec3b>(i, j)[1]) + int(im.at<Vec3b>(i, j)[2])) / 3;
-			im_gray.at<__int8>(i, j) = n;
-		}
-	}
+	cvtColor(im, im_gray, COLOR_BGR2GRAY);
 	//cvtColor(im, im_gray, COLOR_BGR2GRAY);
 	//cout << im_gray.at<int>(1917, 1916) << "\n";
 	Mat thresh;
 	threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
 	vector<vector<Point>> contours;
 	vector<Vec4i> hierarchy;
-	thresh = prepare_im(thresh);
+	//thresh = prepare_im(thresh);
 	findContours(thresh, contours, hierarchy, RETR_TREE, method);
+	int i = 0;
+	for (auto it = contours.begin(); it != contours.end(); it++) {
+		int ifat = hierarchy[i][3];
+		if (ifat != -1) {
+			contours[ifat].insert(contours[ifat].end(), contours[i].begin(), contours[i].end());
+			contours.erase(it);
+			it--;
+			i--;
+		}
+		i++;
+	}
+	for (auto c : contours) {
+		namedWindow("cnt", WINDOW_NORMAL);
+		Mat im2 = im.clone();
+		vector<vector<Point>> contoursnow(1);
+		contoursnow[0] = c;
+		draw_points_on_picture(im2, contoursnow);
+		imshow("cnt", im2);
+		waitKey(0);
+	}
 	return contours;
 }
 
@@ -78,7 +121,7 @@ vector<Point> find_corner_points(const std::vector<Point>& contour, double thres
 vector<Point> cpe(vector<Point> c) {
 	vector<Point> cpc;
 	//double eps = 0.001;
-	double a1ths = 0.6, a2ths = 2.8;
+	double a1ths = 0.628, a2ths = 2.83;
 	int ki = 1;
 	int j = 0;
 	vector<Point> mcps = find_corner_points(c, a1ths, a2ths);
@@ -130,26 +173,44 @@ vector<vector<Point>> make_segments_of_contour(vector<Point> c, vector<Point> cp
 	return segments;
 }
 
-void ellipses_selection(vector<vector<Point>>& segments, 
+void ellipses_selection(const vector<vector<Point>>& segments, 
 	vector<vector<Point>> &for_refine, 
-	vector<Ellipse>& for_combine) {
+	vector<Ellipse>& for_combine, double disTh, Mat image) {
 	for (int i = 0; i < segments.size(); i++) {
 		if (segments[i].size() > 5) {
 			Ellipse ellipse = Ellipse(segments[i]);
-			if (is_ellipse_for_combine(ellipse)) for_combine.push_back(ellipse);
-			else for_refine.push_back(segments[i]);
+			vector<vector<Ellipse>> ime(1);
+			vector<vector<Point>> imc(1, ellipse.self_segment);
+			ime[0].push_back(ellipse);
+			namedWindow("select", WINDOW_NORMAL);
+			imshow("select", draw_ellipses(image.clone(), ime));
+			namedWindow("selectc", WINDOW_NORMAL);
+			draw_points_on_picture(image, imc);
+			imshow("selectc", image);
+			waitKey(0);
+			if (is_ellipse_for_combine(ellipse, disTh)) {
+				for_combine.push_back(ellipse);
+				//cout << find_dis_segment_to_ellipse(ellipse.self_segment, ellipse.coefficents) << "\n";
+			}
+			else { 
+				for_refine.push_back(segments[i]);
+				cout << find_dis_segment_to_ellipse(ellipse.self_segment, ellipse.coefficents) << "\n";
+
+			}
 		}
 	}
 }
 
 double find_dis_segment_to_ellipse(vector<Point> segment, Mat coefficents) {
 	double dis = 0;
+	//coefficents = coefficents / norm(coefficents);
 	double A = coefficents.at<double>(0);
 	double B = coefficents.at<double>(1);
 	double C = coefficents.at<double>(2);
 	double D = coefficents.at<double>(3);
 	double E = coefficents.at<double>(4);
 	double F = coefficents.at<double>(5);
+	//cout << A << " " << B << " " << C << " " << D << " " << E << " " << F << "\n";
 	for (Point p: segment) {
 		dis += abs(A * p.x * p.x + B * p.x * p.y + C * p.y * p.y + D * p.x + E * p.y + F);
 	}
@@ -157,17 +218,15 @@ double find_dis_segment_to_ellipse(vector<Point> segment, Mat coefficents) {
 	return dis;
 }
 
-bool is_ellipse_for_combine(Ellipse ellipse) {
-	double disTh = 0.035;
+bool is_ellipse_for_combine(Ellipse ellipse, double disTh) {
 	double eTh = 0.333;
 	return (find_dis_segment_to_ellipse(ellipse.self_segment, ellipse.coefficents) <= disTh and ellipse.Eratio >= eTh);
 	
 }
 
-void combine_ellipses(vector<Ellipse>& ellipses) {
-	double dminTh = 10;
+void combine_ellipses(vector<Ellipse>& ellipses, double dminTh, Mat image) {
 	double eps = 0.1;
-	for(int i = 0; i < ellipses.size(); i++) {
+	for (int i = 0; i < ellipses.size(); i++) {
 		for (int j = i + 1; j < ellipses.size(); j++) {
 
 			vector<Point> Nl;
@@ -197,7 +256,7 @@ void combine_ellipses(vector<Ellipse>& ellipses) {
 				double dist3 = sqrt(
 					(ellipsei.center.x - ellipsej.center.x) * (ellipsei.center.x - ellipsej.center.x) +
 					(ellipsei.center.y - ellipsej.center.y) * (ellipsei.center.y - ellipsej.center.y));
-				
+
 				bool case1 = ((dist1 > dminTh) and (dist2 > dminTh) and (dist3 > 2.5 * dminTh));
 				Mat Ei_coefs = ellipsei.coefficents;
 				Mat Ej_coefs = ellipsej.coefficents;
@@ -210,31 +269,49 @@ void combine_ellipses(vector<Ellipse>& ellipses) {
 					(minA2 < dminTh) and
 					(abs(minA1 - minA2) < 0.05 * dminTh) and
 					(abs(maxA1 - maxA2) < dminTh));
-				bool case3 = 
-					abs(find_dis_segment_to_ellipse(Nl, new_ellipse.coefficents) - 
-					0.5 * (find_dis_segment_to_ellipse(Li, Ei_coefs) + find_dis_segment_to_ellipse(Lj, Ej_coefs)))
+				bool case3 =
+					abs(find_dis_segment_to_ellipse(Nl, new_ellipse.coefficents) -
+						find_dis_segment_to_ellipse(Li, Ei_coefs))
+					<= eps and abs(find_dis_segment_to_ellipse(Nl, new_ellipse.coefficents) -
+						find_dis_segment_to_ellipse(Lj, Ej_coefs))
 					<= eps;
-				if (case1 and (not case2 or not case3)) {
+				if (case1 and not case3 or not case2) {
+					cout << "bad\n" << case1 << " " << case2 << " " << case3 << "\n";
 					continue;
 				}
 				else if (case2 or case3) {
+					cout << case3 << "norm\n";
+					cout << find_dis_segment_to_ellipse(Nl, new_ellipse.coefficents) << "\n";
+					vector<vector<Ellipse>> start_ellipses(1);
+					vector<vector<Ellipse>> end_ellipse(1);
+					start_ellipses[0].push_back(ellipsei);
+					start_ellipses[0].push_back(ellipsej);
+					end_ellipse[0].push_back(new_ellipse);
+					Mat im_s = draw_ellipses(image.clone(), start_ellipses);
+					Mat im_d = draw_ellipses(image, end_ellipse);
+					/*namedWindow("s", WINDOW_NORMAL);
+					namedWindow("d", WINDOW_NORMAL);
+					imshow("s", im_s);
+					imshow("d", im_d);
+					waitKey(0);*/
 					ellipses[i] = new_ellipse;
 					ellipses.erase(ellipses.begin() + j);
 					i = 0;
 					break;
 				}
-				cout << "a\n";
-
+				//cout << "a\n";
 			}
 		}
 	}
 }
 
-void refine_ellipses(vector<vector<Point>> refine_segments, vector<Ellipse>& ellipses) {
-	double disThRe = 0.114;
+void refine_ellipses(vector<vector<Point>> &refine_segments, vector<Ellipse>& ellipses) {
+	double disThRe = 0.0054;
+	//std::cout << refine_segments.size() << "\n";
+	//std::cout << ellipses.size() << "\n";
 	for (int i = 0; i < refine_segments.size(); i++) {
 		double mn_dist = INFINITY;
-		vector<Ellipse> best_ellipse;
+		Ellipse best_ellipse = Ellipse(vector<Point>());
 		int index = 0;
 		for (int j = 0; j < ellipses.size(); j++) {
 			vector<Point> new_segment = ellipses[j].self_segment;
@@ -244,19 +321,21 @@ void refine_ellipses(vector<vector<Point>> refine_segments, vector<Ellipse>& ell
 			Ellipse new_ellipse = Ellipse(new_segment);
 			double dist = find_dis_segment_to_ellipse(new_segment, new_ellipse.coefficents);
 			if (dist < mn_dist) {
+				//cout << dist << " dst" << "\n";
 				mn_dist = dist;
-				best_ellipse.push_back(new_ellipse);
+				best_ellipse = new_ellipse;
 				index = j;
 			}
 		}
 		if (mn_dist < disThRe) {
-			ellipses[index] = best_ellipse[best_ellipse.size() - 1];
-		}
-		else {
-			ellipses.push_back(Ellipse(refine_segments[i]));
+			ellipses[index] = best_ellipse;
+			refine_segments.erase(refine_segments.begin() + i);
+			i -= 1;
+			cout << mn_dist << "\n";
 		}
 	}
 }
+
 
 //функция, находящая вогнутые точки из картинки(в чем и заключается задача)
 vector<vector<Point>> find_all_concave_points(Mat im, double approx_thresh, int binary_thresh) {
@@ -290,7 +369,7 @@ Mat draw_ellipses(Mat im, vector<vector<Ellipse>> ellipses) {
 				int x = p.x;
 				//cout << x << " " << y << "\n";
 				if (y > 0 and x > 0 and y < im.rows and x < im.cols) {
-					im.at<Vec3b>(y, x) = Vec3b(0, 255, 0);
+					im.at<Vec3b>(y, x) = Vec3b(255, 0, 0);
 				}
 			}
 		}
@@ -302,49 +381,62 @@ Mat draw_ellipses(Mat im, vector<vector<Ellipse>> ellipses) {
 void draw_points_on_picture(Mat &im, vector<vector<Point>> cps) {
 	for (int i = 0; i < cps.size(); i++) {
 		for (int j = 0; j < cps[i].size(); j++) {
-			im.at<Vec3b>(cps[i][j].y, cps[i][j].x) = Vec3b(0, 255, 0);
+			im.at<Vec3b>(cps[i][j].y, cps[i][j].x) = Vec3b(255, 0, 0);
 		}
 	}
 }
 
-vector<vector<Ellipse>> main_func(Mat im, float approx_thresh, int binary_thresh) {
+vector<vector<Ellipse>> main_func(Mat im, float approx_thresh, int binary_thresh, double dTh, double disTh, double dminTh, string imgname) {
 	clock_t start = clock();
 	Mat im_gray;
 	cvtColor(im, im_gray, COLOR_BGR2GRAY);
 	Mat thresh;
 	threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
-	//thresh = prepare_im(thresh);
-	/*namedWindow("f", WINDOW_NORMAL);
-	imshow("f", thresh);
-	waitKey(0);*/
 	vector<vector<Point>> contours = find_contours(im, binary_thresh, 3);
 	vector<vector<Point>> contours_start = find_contours(im, binary_thresh, 1);
-	Mat im_c = im.clone();
-	draw_points_on_picture(im_c, contours_start);
-	//namedWindow("r", WINDOW_NORMAL);
-	//imshow("r", im_c);
-	//waitKey(0);
-	//vector<vector<Point>> cps = find_all_concave_points(im, approx_thresh, binary_thresh);
+	vector<vector<Point>> cps;
 	vector<vector<Ellipse>> all_ellipses;
 	vector<vector<vector<Point>>> segments;
+	vector<vector<Ellipse>> pre_ellipses;
 	for (int i = 0; i < contours.size(); i++) {
 		vector<Point> now_contour = contours[i];
 		vector<Point> c1 = contours_start[i];
 		approxPolyDP(contours[i], now_contour, approx_thresh, true);
 		vector<vector<Point>> segments = make_segments_of_contour(c1, cpe(now_contour));
+		cps.push_back(cpe(now_contour));
 		vector<Ellipse> for_combine;
 		vector<vector<Point>> for_refine;
+		vector<Ellipse> for_refine_ellipses;
+		for (auto s : segments) {
+			for_refine_ellipses.push_back(Ellipse(s));
+		}
 		vector<Ellipse> ellipses;
-		ellipses_selection(segments, for_refine, for_combine);
-		combine_ellipses(for_combine);
-
-		refine_ellipses(for_refine, for_combine);
-
+		ellipses_selection(segments, for_refine, for_combine, disTh, im.clone());
+		pre_ellipses.push_back(for_refine_ellipses);
+		//combine_ellipses(for_combine, dminTh, im);
+		/*refine_ellipses(for_refine, for_combine);
+		vector<Ellipse> af_ref;
+		for (auto s : for_refine) {
+			af_ref.push_back(Ellipse(s));
+		}*/
 		all_ellipses.push_back(for_combine);
-		
+		//all_ellipses.push_back(af_ref);
+		Mat imcopytime = im.clone();
+		vector<vector<Point>> now_all_contour;
+		now_all_contour.push_back(c1);
+		draw_points_on_picture(imcopytime, cps);
+		/*namedWindow("try", WINDOW_NORMAL);
+		imshow("try", imcopytime);
+		waitKey(0);*/
 	}
 	clock_t end = clock();
 	cout << (double)(end - start) / CLOCKS_PER_SEC << "seconds\n";
+	Mat impre = draw_ellipses(im.clone(), pre_ellipses);
+	Mat imcps = im.clone();
+	draw_points_on_picture(imcps, cps);
+	//imshow("pre", impre);
+	//imwrite("test_res/" + imgname.substr(0, imgname.size() - 4) + "/pre_" + to_string(binary_thresh) + imgname, impre);
+	//imshow("cps", imcps);
 	return all_ellipses;
 }
 

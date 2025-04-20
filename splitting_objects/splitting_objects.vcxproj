@@ -145,11 +145,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="data_manage.cpp" />
     <ClCompile Include="Ellipse.cpp" />
     <ClCompile Include="funcs.cpp" />
     <ClCompile Include="splitting_objects.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="data_manage.h" />
     <ClInclude Include="Ellipse.h" />
     <ClInclude Include="funcs.h" />
   </ItemGroup>

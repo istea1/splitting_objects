@@ -1,4 +1,4 @@
-#include "Ellipse.h"
+п»ї#include "Ellipse.h"
 
 using namespace std;
 using namespace cv;
@@ -23,11 +23,19 @@ void print_eigmat(Eigen::MatrixXcd mat) {
 
 Ellipse::Ellipse(vector<Point> segment) {
 	self_segment = segment;
-	calculate_coefs();
-	make_self_contour();
+	if (segment.size() >= 5) {
+		make_data(segment);
+		try{
+			calculate_coefs();
+			make_self_contour();
+		}
+		catch (...) {
+			//vector<Point> print_segment = read_data();
+			//cout << "trouble\n";
+		}
+	}
 }
 void Ellipse::calculate_coefs() {
-	//cout << self_segment.size() << "\n";
 	Mat XY = Mat(self_segment.size(), 2, CV_64F);
 	int i = 0;
 	double cx = 0, cy = 0;
@@ -56,15 +64,16 @@ void Ellipse::calculate_coefs() {
 		D2.at<double>(i, 1) = y - cy;
 		D2.at<double>(i, 2) = 1.0;
 	}
-	// 3. Вычисление S1, S2 и S3
+	// 3. Г‚Г»Г·ГЁГ±Г«ГҐГ­ГЁГҐ S1, S2 ГЁ S3
 	Mat S1 = D1.t() * D1;  // D1' * D1
 	Mat S2 = D1.t() * D2;  // D1' * D2
 	Mat S3 = D2.t() * D2;  // D2' * D2
-	// 4. Вычисление T
+	// 4. Г‚Г»Г·ГЁГ±Г«ГҐГ­ГЁГҐ T
 	Mat T = -S3.inv() * S2.t();  // -inv(S3) * S2'
-	// 5. Создание матрицы M
+
+	// 5. Г‘Г®Г§Г¤Г Г­ГЁГҐ Г¬Г ГІГ°ГЁГ¶Г» M
 	Mat M = S1 + S2 * T;
-	// 6. Подготовка M в требуемом формате
+	// 6. ГЏГ®Г¤ГЈГ®ГІГ®ГўГЄГ  M Гў ГІГ°ГҐГЎГіГҐГ¬Г®Г¬ ГґГ®Г°Г¬Г ГІГҐ
 	Eigen::MatrixXd E_M(3, M.cols);
 	Mat M_final = Mat(3, M.cols, CV_64F);
 	for (int i = 0; i < M.cols; i++) {
@@ -76,7 +85,7 @@ void Ellipse::calculate_coefs() {
 		M_final.at<double>(2, i) = M.at<double>(0, i) / 2;
 	}
 
-	// 7. Вычисление собственных векторов и значений
+	// 7. Г‚Г»Г·ГЁГ±Г«ГҐГ­ГЁГҐ Г±Г®ГЎГ±ГІГўГҐГ­Г­Г»Гµ ГўГҐГЄГІГ®Г°Г®Гў ГЁ Г§Г­Г Г·ГҐГ­ГЁГ©
 	Eigen::EigenSolver<Eigen::MatrixXd> eigenSolver(E_M);
 	Mat evec, eval;
 	Eigen::MatrixXcd eigenvectors = eigenSolver.eigenvectors();
@@ -101,22 +110,19 @@ void Ellipse::calculate_coefs() {
 	}
 	//print_mat(evec);
 
-	// 8. Процесс извлечения нужных собственных векторов
+	// 8. ГЏГ°Г®Г¶ГҐГ±Г± ГЁГ§ГўГ«ГҐГ·ГҐГ­ГЁГї Г­ГіГ¦Г­Г»Гµ Г±Г®ГЎГ±ГІГўГҐГ­Г­Г»Гµ ГўГҐГЄГІГ®Г°Г®Гў
 	Mat A1;
 	Mat cond = 4 * evec.row(0).mul(evec.row(2)) - evec.row(1).mul(evec.row(1));
 	//print_mat(cond);
-	int times = 0;
 	for (int i = 0; i < cond.cols; i++) {
 		if (cond.at<double>(0, i) > 0) {
 			A1.push_back(evec.col(i));
-			times += 1;
 		}
 	}
-	// 9. Создание A
-	cout << "s\n";
+	//print_mat(A1);
+	// 9. Г‘Г®Г§Г¤Г Г­ГЁГҐ A
 	Mat A = A1;
-	print_mat(A1);
-	Mat TA1 = T * A;
+	Mat TA1 = T * A1;
 
 	for (int i = 0; i < A1.rows; i++) {
 		A.push_back(TA1.row(i));
@@ -131,12 +137,9 @@ void Ellipse::calculate_coefs() {
 	A.at<double>(3, 0) = A3;
 	A.at<double>(4, 0) = A4;
 	A.at<double>(5, 0) = A5;
-	cout << "f\n";
 	// Normalize A
-	//A = A / norm(A);
-	coefficents = A / norm(A);
-	//print_mat(A1);
-	
+	A = A / norm(A);
+	coefficents = A;
 }
 void Ellipse::make_self_contour() {
 	double A = coefficents.at<double>(0);
@@ -167,11 +170,11 @@ void Ellipse::make_self_contour() {
 		double x;
 		double y;
 		double cp = cos(i); double sp = sin(i);
-		// применяем поворот
+		// ГЇГ°ГЁГ¬ГҐГ­ГїГҐГ¬ ГЇГ®ГўГ®Г°Г®ГІ
 		x = x0 + a * ct * cp - b * st * sp;
 		y = y0 + a * st * cp + b * ct * sp;
 
-		// смещаем в центр
+		// Г±Г¬ГҐГ№Г ГҐГ¬ Гў Г¶ГҐГ­ГІГ°
 		contour.push_back(Point2f(x, y));
 	}
 
