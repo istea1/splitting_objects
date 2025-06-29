@@ -28,6 +28,7 @@ Ellipse::Ellipse(vector<Point> segment) {
 		try{
 			calculate_coefs();
 			make_self_contour();
+			coefficents = coefficents;
 		}
 		catch (...) {
 			//vector<Point> print_segment = read_data();
@@ -138,7 +139,7 @@ void Ellipse::calculate_coefs() {
 	A.at<double>(4, 0) = A4;
 	A.at<double>(5, 0) = A5;
 	// Normalize A
-	A = A / norm(A);
+	//A = A / norm(A);
 	coefficents = A;
 }
 void Ellipse::make_self_contour() {
@@ -150,19 +151,20 @@ void Ellipse::make_self_contour() {
 	double F = coefficents.at<double>(5);
 	double e = 4 * A * C - B * B;
 
-	double x0 = (B * E - 2 * C * D) / e;
-	double y0 = (B * D - 2 * A * E) / e;
+	x0 = (B * E - 2 * C * D) / e;
+	y0 = (B * D - 2 * A * E) / e;
 	center = Point2f(x0, y0);
 	double F0 = -2 * (A * x0 * x0 + B * x0 * y0 + C * y0 * y0 + D * x0 + E * y0 + F);
 	double g = sqrt((A - C) * (A - C) + B * B);
-	double a = F0 / (A + C + g);
-	double b = F0 / (A + C - g);
+	a = F0 / (A + C + g);
+	b = F0 / (A + C - g);
 	a = sqrt(a);
 	b = sqrt(b);
 	minorAxisL = 2 * min(a, b);
 	majorAxisL = 2 * max(a, b);
 	Eratio = minorAxisL / majorAxisL;
 	double t = 0.5 * atan2(B, A - C);
+	𝜃 = t;
 	double ct = cos(t); double st = sin(t);
 	int num = 50;
 	double step = 0.2 * M_PI / num;
@@ -177,5 +179,5 @@ void Ellipse::make_self_contour() {
 		// ñìåùàåì â öåíòð
 		contour.push_back(Point2f(x, y));
 	}
-
+	square = M_PI * minorAxisL * majorAxisL / 4;
 }

@@ -1,4 +1,4 @@
-#define _USE_MATH_DEFINES
+﻿#define _USE_MATH_DEFINES
 #include <opencv2/opencv.hpp>
 #include <numeric>
 #include <vector>
@@ -18,6 +18,10 @@ public:
 	double Eratio = 0;
 	double minorAxisL = 0;
 	double majorAxisL = 0;
+	double square = 0;
+	double 𝜃 = 0;
+	double x0, y0;
+	double a, b;
 	Point2f center = Point2f(0, 0);
 private:
 	void calculate_coefs();
