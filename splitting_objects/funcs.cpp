@@ -279,13 +279,13 @@ double find_dis_segment_to_ellipse(vector<Point> segment, Mat coefficents, Ellip
 	double x0 = ellipse.x0, y0 = ellipse.y0;
 	double 𝜃 = ellipse.𝜃;
 	double a = ellipse.a, b = ellipse.b;
-	cout << x0 << " " << y0 << " " << 𝜃 << " " << a << " " << b << " | ";
+	//cout << x0 << " " << y0 << " " << 𝜃 << " " << a << " " << b << " | ";
 	for (Point p: segment) {
 		int x = p.x, y = p.y;
-		dis += fabs((x - x0) * (x - x0) / a / a + (y - y0) * (y - y0) / b / b - (y - y0) * (x - x0) / (a * b * cos(𝜃)));
-		double perem = fabs((x - x0) * (x - x0) / a / a + (y - y0) * (y - y0) / b / b - (y - y0) * (x - x0) / (a * b * cos(𝜃)));
-		//dis += fabs(A * x * x + B * x * y + C * y * y + D * x + E * y + F);
-		cout << x << " " << y << " :" << perem << " | ";
+		//dis += fabs((x - x0) * (x - x0) / a / a + (y - y0) * (y - y0) / b / b - (y - y0) * (x - x0) / (a * b * cos(𝜃)));
+		//double perem = fabs((x - x0) * (x - x0) / a / a + (y - y0) * (y - y0) / b / b - (y - y0) * (x - x0) / (a * b * cos(𝜃)));
+		dis += fabs(A * x * x + B * x * y + C * y * y + D * x + E * y + F);
+		//cout << x << " " << y << " :" << perem << " | ";
 	}
 	dis = dis / segment.size();
 	cout << "\n" << dis << " dis segment to ellipse\n";
@@ -476,7 +476,7 @@ vector<vector<Ellipse>> main_func(Mat im, float approx_thresh, int binary_thresh
 		vector<Ellipse> ellipses;
 		ellipses_selection(segments[i], for_refine, for_combine, disTh, im.clone());
 		combine_ellipses(for_combine, dminTh, im);
-		refine_ellipses(for_refine, for_combine, im);
+		//refine_ellipses(for_refine, for_combine, im);
 		all_ellipses.push_back(for_combine);
 		//all_ellipses.push_back(for_refine);
 		//all_ellipses.push_back(af_ref);

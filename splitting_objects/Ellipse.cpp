@@ -28,7 +28,7 @@ Ellipse::Ellipse(vector<Point> segment) {
 		try{
 			calculate_coefs();
 			make_self_contour();
-			coefficents = coefficents;
+			coefficents = coefficents / square;
 		}
 		catch (...) {
 			//vector<Point> print_segment = read_data();
