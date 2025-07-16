@@ -28,7 +28,8 @@ Ellipse::Ellipse(vector<Point> segment) {
 		try{
 			calculate_coefs();
 			make_self_contour();
-			coefficents = coefficents / square;
+			coefficents = coefficents;
+			calc_self_deviation();
 		}
 		catch (...) {
 			//vector<Point> print_segment = read_data();
@@ -151,21 +152,32 @@ void Ellipse::make_self_contour() {
 	double F = coefficents.at<double>(5);
 	double e = 4 * A * C - B * B;
 
-	x0 = (B * E - 2 * C * D) / e;
-	y0 = (B * D - 2 * A * E) / e;
+	double x0 = (B * E - 2 * C * D) / e;
+	double y0 = (B * D - 2 * A * E) / e;
 	center = Point2f(x0, y0);
 	double F0 = -2 * (A * x0 * x0 + B * x0 * y0 + C * y0 * y0 + D * x0 + E * y0 + F);
 	double g = sqrt((A - C) * (A - C) + B * B);
-	a = F0 / (A + C + g);
-	b = F0 / (A + C - g);
+	double a = F0 / (A + C + g);
+	double b = F0 / (A + C - g);
 	a = sqrt(a);
 	b = sqrt(b);
 	minorAxisL = 2 * min(a, b);
 	majorAxisL = 2 * max(a, b);
 	Eratio = minorAxisL / majorAxisL;
 	double t = 0.5 * atan2(B, A - C);
-	𝜃 = t;
 	double ct = cos(t); double st = sin(t);
+	if (a > b) {
+		map1 = Point2f( x0 + a * ct, y0 + a * st );
+		map2 = Point2f( x0 - a * ct, y0 - a * st );
+		mip1 = Point2f( x0 - b * st, y0 + b * ct );
+		mip2 = Point2f( x0 + b * st, y0 - b * ct );
+	}
+	else {
+		mip1 = Point2f( x0 + a * ct, y0 + a * st );
+		mip2 = Point2f( x0 - a * ct, y0 - a * st );
+		map1 = Point2f( x0 - b * st, y0 + b * ct );
+		map2 = Point2f( x0 + b * st, y0 - b * ct );
+	}
 	int num = 50;
 	double step = 0.2 * M_PI / num;
 	for (double i = 0; i <= num; i += step) {
@@ -180,4 +192,69 @@ void Ellipse::make_self_contour() {
 		contour.push_back(Point2f(x, y));
 	}
 	square = M_PI * minorAxisL * majorAxisL / 4;
+}
+void Ellipse::calc_self_deviation() {
+	double dis = 0;
+	double disexp = 0;
+	double A = coefficents.at<double>(0);
+	double B = coefficents.at<double>(1);
+	double C = coefficents.at<double>(2);
+	double D = coefficents.at<double>(3);
+	double E = coefficents.at<double>(4);
+	double F = coefficents.at<double>(5);
+	double a, b, c, p, S, r;
+	c = sqrt(pow(map1.x - map2.x, 2) + pow(map1.y - map2.y, 2));
+	a = sqrt(pow(mip1.x - map1.x, 2) + pow(mip1.y - map1.y, 2));
+	b = sqrt(pow(mip1.x - map2.x, 2) + pow(mip1.y - map2.y, 2));
+	p = (a + b + c) / 2;
+	S = sqrt(p * (p - a) * (p - b) * (p - c));
+	r = a * b * c / 4 / S;
+	cout << "radius : " << r << "\n";
+	for (Point p : self_segment) {
+		int x = p.x, y = p.y;
+		double min_dist = INFINITY;
+		for (Point2f pc : contour) {
+			int xc = pc.x, yc = pc.y;
+			double now_dist = sqrt(pow(y - yc, 2) + pow(x - xc, 2));
+			if (now_dist < min_dist) min_dist = now_dist;
+		}
+		dis += min_dist;
+		double d1 = sqrt(pow(mip1.x - x, 2) + pow(mip1.y - y, 2)), d2 = sqrt(pow(mip2.x - x, 2) + pow(mip2.y - y, 2));
+		/*if (d1 >= d2) {
+			Point timepoint = mip1;
+			mip1 = mip2;
+			mip2 = timepoint;
+		}*/
+		Point2f nowcenter = findCircleCenter(map1, map2, mip1, r);
+		double now_distexp = fabs(sqrt(pow(nowcenter.x - x, 2) + pow(nowcenter.y - y, 2)) - r);
+		cout << nowcenter << " ";
+		disexp += now_distexp;
+		center_circle = nowcenter;
+	}
+	cout << "\n";
+	dis = dis / self_segment.size();
+	disexp = disexp / self_segment.size();
+	deviation_of_segment = dis;
+	cout << "|n||| " << dis << " dis segment to ellipse\n";
+	cout << "dis experemental " << disexp << " |||\n";
+	r_circle = r;
+}
+
+Point findCircleCenter(const Point& A, const Point& B, const Point& C, double R) {
+	// Вычисляем коэффициенты системы уравнений
+	double A1 = 2 * (B.x - A.x);
+	double B1 = 2 * (B.y - A.y);
+	double C1 = B.x * B.x + B.y * B.y - A.x * A.x - A.y * A.y;
+
+	double A2 = 2 * (C.x - A.x);
+	double B2 = 2 * (C.y - A.y);
+	double C2 = C.x * C.x + C.y * C.y - A.x * A.x - A.y * A.y;
+
+	// Решаем систему методом Крамера
+	double det = A1 * B2 - A2 * B1;
+
+	double x0 = (C1 * B2 - C2 * B1) / det;
+	double y0 = (A1 * C2 - A2 * C1) / det;
+
+	return Point(x0, y0);
 }

@@ -19,11 +19,16 @@ public:
 	double minorAxisL = 0;
 	double majorAxisL = 0;
 	double square = 0;
-	double 𝜃 = 0;
-	double x0, y0;
-	double a, b;
+	double deviation_of_segment = 100;
+	double r_circle = 0;
+	Point center_circle;
 	Point2f center = Point2f(0, 0);
+	Point2f map1, map2, mip1, mip2;
+
 private:
 	void calculate_coefs();
 	void make_self_contour();
+	void calc_self_deviation();
 };
+
+Point findCircleCenter(const Point& A, const Point& B, const Point& C, double R);

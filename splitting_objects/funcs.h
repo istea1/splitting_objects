@@ -24,8 +24,6 @@ void ellipses_selection(const vector<vector<Point>>& segments,
 
 vector <vector<vector<Point>>> contour_processing_return_segments(Mat im, int binary_thresh, int method_for_cpe, int method_for_segments, float approx_thresh);
 
-double find_dis_segment_to_ellipse(vector<Point> segment, Mat coefficents, Ellipse ellipse);
-
 void combine_ellipses(vector<Ellipse>& ellipses, double dminTh, Mat image);
 
 void refine_ellipses(vector<vector<Point>> &refine_segments, vector<Ellipse>& ellipses);

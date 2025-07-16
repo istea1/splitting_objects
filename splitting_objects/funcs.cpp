@@ -259,8 +259,8 @@ void ellipses_selection(const vector<vector<Point>>& segments,
 			Mat image_clone = image.clone();
 			vector<vector<Ellipse>> for_draw(1, vector<Ellipse>(1, ellipse));
 			vector<vector<Point>> for_draw2(1, ellipse.self_segment);
-			draw_ellipses(image_clone, for_draw);
 			draw_points_on_picture(image_clone, for_draw2);
+			draw_ellipses(image_clone, for_draw);
 			namedWindow("testing", WINDOW_NORMAL);
 			imshow("testing", image_clone);
 			waitKey(0);
@@ -268,38 +268,15 @@ void ellipses_selection(const vector<vector<Point>>& segments,
 	}
 }
 
-double find_dis_segment_to_ellipse(vector<Point> segment, Mat coefficents, Ellipse ellipse) {
-	double dis = 0;
-	double A = coefficents.at<double>(0);
-	double B = coefficents.at<double>(1);
-	double C = coefficents.at<double>(2); //-0.00561722 0.00296741 - 0.00248724 0.122259 0.306953 - 0.943815
-	double D = coefficents.at<double>(3); //-1.75058e-05 8.21854e-06 - 4.88733e-06 0.00635186 0.00109576 - 0.999979
-	double E = coefficents.at<double>(4);
-	double F = coefficents.at<double>(5);
-	double x0 = ellipse.x0, y0 = ellipse.y0;
-	double 𝜃 = ellipse.𝜃;
-	double a = ellipse.a, b = ellipse.b;
-	//cout << x0 << " " << y0 << " " << 𝜃 << " " << a << " " << b << " | ";
-	for (Point p: segment) {
-		int x = p.x, y = p.y;
-		//dis += fabs((x - x0) * (x - x0) / a / a + (y - y0) * (y - y0) / b / b - (y - y0) * (x - x0) / (a * b * cos(𝜃)));
-		//double perem = fabs((x - x0) * (x - x0) / a / a + (y - y0) * (y - y0) / b / b - (y - y0) * (x - x0) / (a * b * cos(𝜃)));
-		dis += fabs(A * x * x + B * x * y + C * y * y + D * x + E * y + F);
-		//cout << x << " " << y << " :" << perem << " | ";
-	}
-	dis = dis / segment.size();
-	cout << "\n" << dis << " dis segment to ellipse\n";
-	return dis;
-}
 
 bool is_ellipse_for_combine(Ellipse ellipse, double disTh) {
-	double eTh = 0.333;
-	return (find_dis_segment_to_ellipse(ellipse.self_segment, ellipse.coefficents, ellipse) <= disTh and ellipse.Eratio >= eTh);
+	double eTh = 0;
+	return (ellipse.deviation_of_segment <= disTh and ellipse.Eratio >= eTh);
 	
 }
 
 void combine_ellipses(vector<Ellipse>& ellipses, double dminTh, Mat image) {
-	double eps = 0.1;
+	double eps = 0.5;
 	for (int i = 0; i < ellipses.size(); i++) {
 		for (int j = i + 1; j < ellipses.size(); j++) {
 
@@ -344,30 +321,23 @@ void combine_ellipses(vector<Ellipse>& ellipses, double dminTh, Mat image) {
 					(fabs(minA1 - minA2) < 0.05 * dminTh) and
 					(fabs(maxA1 - maxA2) < dminTh));
 				bool case3 =
-					fabs(find_dis_segment_to_ellipse(Nl, new_ellipse.coefficents, new_ellipse) -
-						find_dis_segment_to_ellipse(Li, Ei_coefs, ellipsei))
-					<= eps and fabs(find_dis_segment_to_ellipse(Nl, new_ellipse.coefficents, new_ellipse) -
-						find_dis_segment_to_ellipse(Lj, Ej_coefs, ellipsej))
+					fabs(new_ellipse.deviation_of_segment -
+						ellipsei.deviation_of_segment)
+					<= eps and fabs(new_ellipse.deviation_of_segment -
+						ellipsej.deviation_of_segment)
 					<= eps;
 				if (case1 and not (case3 and case2)) {
 					//cout << "bad\n" << case1 << " " << case2 << " " << case3 << "\n";
 					continue;
 				}
-				else if (case2 or case3) {
+				else if ((case2 or case3) and new_ellipse.majorAxisL <= 250) {
 					//cout << case3 << "norm\n";
-					cout << find_dis_segment_to_ellipse(Nl, new_ellipse.coefficents, new_ellipse) << "\n";
+					cout << new_ellipse.deviation_of_segment << "\n";
 					vector<vector<Ellipse>> start_ellipses(1);
 					vector<vector<Ellipse>> end_ellipse(1);
 					start_ellipses[0].push_back(ellipsei);
 					start_ellipses[0].push_back(ellipsej);
 					end_ellipse[0].push_back(new_ellipse);
-					Mat im_s = draw_ellipses(image.clone(), start_ellipses);
-					Mat im_d = draw_ellipses(image, end_ellipse);
-					/*namedWindow("s", WINDOW_NORMAL);
-					namedWindow("d", WINDOW_NORMAL);
-					imshow("s", im_s);
-					imshow("d", im_d);
-					waitKey(0);*/
 					ellipses[i] = new_ellipse;
 					ellipses.erase(ellipses.begin() + j);
 					i = 0;
@@ -380,7 +350,7 @@ void combine_ellipses(vector<Ellipse>& ellipses, double dminTh, Mat image) {
 }
 
 void refine_ellipses(vector<Ellipse> &refine_segments, vector<Ellipse>& ellipses, Mat image) {
-	double disThRe = 0.3;
+	double disThRe = 1;
 	//std::cout << refine_segments.size() << "\n";
 	//std::cout << ellipses.size() << "\n";
 	for (int i = 0; i < refine_segments.size(); i++) {
@@ -393,16 +363,16 @@ void refine_ellipses(vector<Ellipse> &refine_segments, vector<Ellipse>& ellipses
 				new_segment.push_back(p);
 			}
 			Ellipse new_ellipse = Ellipse(new_segment);
-			double dist = find_dis_segment_to_ellipse(new_segment, new_ellipse.coefficents, new_ellipse);
+			double dist = new_ellipse.deviation_of_segment;
 			cout << dist << " dst" << "\n";
-			Mat image_clone = image.clone();
+			/*Mat image_clone = image.clone();
 			vector<vector<Ellipse>> for_draw(1, vector<Ellipse>(1, new_ellipse));
 			vector<vector<Point>> for_draw2(1, new_ellipse.self_segment);
 			draw_ellipses(image_clone, for_draw);
 			draw_points_on_picture(image_clone, for_draw2);
 			namedWindow("testing", WINDOW_NORMAL);
 			imshow("testing", image_clone);
-			waitKey(0);
+			waitKey(0);*/
 			if (dist < mn_dist) {
 				//cout << dist << " dst" << "\n";
 				mn_dist = dist;
@@ -442,18 +412,32 @@ vector<vector<Point>> find_all_concave_points(Mat im, double approx_thresh, int 
 }
 
 Mat draw_ellipses(Mat im, vector<vector<Ellipse>> ellipses) {
-	for (int i = 0; i < ellipses.size(); i++) {
-		for (int j = 0; j < ellipses[i].size(); j++) {
-			for (Point2f p:ellipses[i][j].contour) {
-				int y = p.y;
-				int x = p.x;
-				//cout << x << " " << y << "\n";
-				if (y > 0 and x > 0 and y < im.rows and x < im.cols) {
-					im.at<Vec3b>(y, x) = Vec3b(255, 0, 0);
+	try {
+		for (int i = 0; i < ellipses.size(); i++) {
+			for (int j = 0; j < ellipses[i].size(); j++) {
+				int index = 0;
+				int size_contour = ellipses[i][j].contour.size();
+				//circle(im, ellipses[i][j].center_circle, ellipses[i][j].r_circle, (100, 255, 55), 1);
+				for (Point2f p : ellipses[i][j].contour) {
+					int y = p.y;
+					int x = p.x;
+					//cout << x << " " << y << "\n";
+					if (y > 0 and x > 0 and y < im.rows and x < im.cols) {
+						im.at<Vec3b>(y, x) = Vec3b(0, 255, 0);
+					}
+					index += 1;
 				}
+				/*im.at<Vec3b>(ellipses[i][j].map1.y, ellipses[i][j].map1.x) = Vec3b(255, 0, 0);
+				im.at<Vec3b>(ellipses[i][j].map2.y, ellipses[i][j].map2.x) = Vec3b(255, 0, 0);
+				im.at<Vec3b>(ellipses[i][j].mip1.y, ellipses[i][j].mip1.x) = Vec3b(255, 0, 0);
+				im.at<Vec3b>(ellipses[i][j].mip2.y, ellipses[i][j].mip2.x) = Vec3b(255, 0, 0);
+				*/
 			}
+
 		}
 	}
+
+	catch (...){}
 	return im;
 }
 
@@ -476,7 +460,7 @@ vector<vector<Ellipse>> main_func(Mat im, float approx_thresh, int binary_thresh
 		vector<Ellipse> ellipses;
 		ellipses_selection(segments[i], for_refine, for_combine, disTh, im.clone());
 		combine_ellipses(for_combine, dminTh, im);
-		//refine_ellipses(for_refine, for_combine, im);
+		refine_ellipses(for_refine, for_combine, im);
 		all_ellipses.push_back(for_combine);
 		//all_ellipses.push_back(for_refine);
 		//all_ellipses.push_back(af_ref);
