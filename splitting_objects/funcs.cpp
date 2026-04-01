@@ -1,500 +1,646 @@
 ﻿#include "funcs.h"
 
+#include <algorithm>
+#include <iterator>
+#include <limits>
+
 using namespace cv;
 using namespace std;
 
+namespace {
+    inline Mat to_gray(const Mat& image) {
+        if (image.channels() == 1) {
+            return image.clone();
+        }
+        Mat gray;
+        cvtColor(image, gray, COLOR_BGR2GRAY);
+        return gray;
+    }
+
+    inline bool is_inner_point(const Point& p, const pair<int, int>& image_size) {
+        return p.x != 0 && p.x != image_size.first - 1 && p.y != 0 && p.y != image_size.second - 1;
+    }
+
+    inline double point_distance(const Point2f& a, const Point2f& b) {
+        return std::hypot(static_cast<double>(a.x - b.x), static_cast<double>(a.y - b.y));
+    }
+
+    template <typename T>
+    inline const T& clamp_value(const T& value, const T& low, const T& high) {
+        return value < low ? low : (value > high ? high : value);
+    }
+
+    void refine_ellipses_impl(vector<Ellipse>& refine_segments, vector<Ellipse>& ellipses) {
+        const double disThRe = 1.0;
+        if (refine_segments.empty() || ellipses.empty()) {
+            return;
+        }
+
+        for (size_t i = 0; i < refine_segments.size(); ++i) {
+            double mn_dist = std::numeric_limits<double>::infinity();
+            Ellipse best_ellipse(vector<Point>{});
+            size_t best_index = 0;
+
+            for (size_t j = 0; j < ellipses.size(); ++j) {
+                vector<Point> new_segment;
+                new_segment.reserve(ellipses[j].self_segment.size() + refine_segments[i].self_segment.size());
+                new_segment.insert(new_segment.end(), ellipses[j].self_segment.begin(), ellipses[j].self_segment.end());
+                new_segment.insert(new_segment.end(), refine_segments[i].self_segment.begin(), refine_segments[i].self_segment.end());
+
+                Ellipse new_ellipse(new_segment);
+                if (new_ellipse.majorAxisL <= 0.0) {
+                    continue;
+                }
+
+                if (new_ellipse.deviation_of_segment < mn_dist) {
+                    mn_dist = new_ellipse.deviation_of_segment;
+                    best_ellipse = std::move(new_ellipse);
+                    best_index = j;
+                }
+            }
+
+            if (mn_dist < disThRe) {
+                ellipses[best_index] = std::move(best_ellipse);
+            }
+        }
+    }
+} // namespace
+
 void check_is_files_identic(string name1, string name2) {
-	ifstream file1(name1), file2(name2);
-	string line1, line2;
-	while (getline(file1, line1)) {
-		getline(file2, line2);
-		if (line1 != line2) {
-			cout << line1 << "###" << line2 << "###err\n";
-		}
-	}
-	file1.close(), file2.close();
+    ifstream file1(name1), file2(name2);
+    string line1, line2;
+    while (getline(file1, line1)) {
+        getline(file2, line2);
+        if (line1 != line2) {
+            cout << line1 << "###" << line2 << "###err\n";
+        }
+    }
 }
 
 void write_contours_to_file(vector<vector<Point>> contours, string filename) {
-	ofstream file(filename);
-	for (auto contour : contours) {
-		for (Point p : contour) {
-			file << p << "\n";
-		}
-		
-	}
-	file.close();
+    ofstream file(filename);
+    for (const auto& contour : contours) {
+        for (const Point& p : contour) {
+            file << p << "\n";
+        }
+    }
 }
 
 void write_segments_to_file(vector<vector<vector<Point>>> segments, string filename) {
-	ofstream file(filename);
-	for (auto contour : segments) {
-		for (auto segment : contour) {
-			for (auto p : segment) {
-				file << p << "\n";
-			}
-		}
-
-	}
-	file.close();
+    ofstream file(filename);
+    for (const auto& contour : segments) {
+        for (const auto& segment : contour) {
+            for (const auto& p : segment) {
+                file << p << "\n";
+            }
+        }
+    }
 }
 
+vector<vector<vector<Point>>> contour_processing_return_segments(Mat im, int binary_thresh, int method_for_cpe, int method_for_segments, float approx_thresh) {
+    (void)method_for_cpe;
 
-vector <vector<vector<Point>>> contour_processing_return_segments(Mat im, int binary_thresh, int method_for_cpe, int method_for_segments, float approx_thresh) {
-	pair<int, int> image_size;
-	image_size.first = im.cols;
-	image_size.second = im.rows;
-	Mat im_gray(im.rows, im.cols, CV_8U);
-	cvtColor(im, im_gray, COLOR_BGR2GRAY);
-	Mat thresh;
-	threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
-	vector<vector<Point>> contours;
-	vector<vector<Point>> contours_start;
-	vector<Vec4i> hierarchy;
-	vector<Vec4i> hierarchy_start;
-	findContours(thresh, contours, hierarchy, RETR_TREE, method_for_cpe);
-	findContours(thresh, contours_start, hierarchy_start, RETR_TREE, method_for_segments);
-	vector<vector<vector<Point>>> segments(contours.size());
-	auto its = segments.begin();
-	for (int i = 0; i != contours.size(); i++, its++) {
-		vector<Point> now_contour;
-		vector<Point> c1 = contours_start[i];
-		approxPolyDP(contours[i], now_contour, approx_thresh, true);
-		segments[i] = make_segments_of_contour(c1, cpe(now_contour), image_size);
-		int ifat = hierarchy[i][3];
-		if (ifat != -1) {
-			//contours[ifat].insert(contours[ifat].end(), contours[i].begin(), contours[i].end());
-			segments[ifat].insert(segments[ifat].end(), segments[i].begin(), segments[i].end());
-			segments.erase(its);
-			//contours.erase(it);
-			its--;
-			//it--;
-			//i--; 
+    const pair<int, int> image_size = { im.cols, im.rows };
+    const Mat im_gray = to_gray(im);
 
-		}
-	}
-	/*write_segments_to_file(segments, "filetest.txt");
-	check_is_files_identic("filetest.txt", "filetest2.txt");*/
-	/*for (int i = 0; i < segments.size(); i++) {
-		for (auto s : segments[i]) {
-			Mat imc = im.clone();
-			vector<vector<Point>> nsi;
-			nsi.push_back(s);
-			draw_points_on_picture(imc, nsi);
-			namedWindow("nsi", WINDOW_NORMAL);
-			imshow("nsi", imc);
-			waitKey(0);
-		}
-		cout << "norm\n";
-	}*/
-	return segments;
+    Mat thresh;
+    threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
+
+    vector<vector<Point>> contours;
+    vector<Vec4i> hierarchy;
+    findContours(thresh, contours, hierarchy, RETR_TREE, method_for_segments);
+
+    vector<vector<vector<Point>>> segments(contours.size());
+    vector<char> keep(contours.size(), 1);
+
+    for (size_t i = 0; i < contours.size(); ++i) {
+        vector<Point> approx_contour;
+        approxPolyDP(contours[i], approx_contour, approx_thresh, true);
+        segments[i] = make_segments_of_contour(contours[i], cpe(approx_contour), image_size);
+    }
+
+    for (size_t i = 0; i < contours.size(); ++i) {
+        const int parent = hierarchy[i][3];
+        if (parent != -1) {
+            auto& dst = segments[parent];
+            auto& src = segments[i];
+            dst.insert(dst.end(), std::make_move_iterator(src.begin()), std::make_move_iterator(src.end()));
+            keep[i] = 0;
+        }
+    }
+
+    vector<vector<vector<Point>>> result;
+    result.reserve(contours.size());
+    for (size_t i = 0; i < segments.size(); ++i) {
+        if (keep[i]) {
+            result.push_back(std::move(segments[i]));
+        }
+    }
+
+    return result;
 }
-
 
 vector<vector<Point>> find_contours(Mat im, int binary_thresh, int method) {
-	Mat im_gray(im.rows, im.cols, CV_8U);
-	cvtColor(im, im_gray, COLOR_BGR2GRAY);
-	//cvtColor(im, im_gray, COLOR_BGR2GRAY);
-	//cout << im_gray.at<int>(1917, 1916) << "\n";
-	Mat thresh;
-	threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
-	vector<vector<Point>> contours;
-	vector<Vec4i> hierarchy;
-	//thresh = prepare_im(thresh);
-	findContours(thresh, contours, hierarchy, RETR_TREE, method);
-	int i = 0;
-	for (auto it = contours.begin(); it != contours.end(); it++) {
-		int ifat = hierarchy[i][3];
-		if (ifat != -1) {
-			contours[ifat].insert(contours[ifat].end(), contours[i].begin(), contours[i].end());
-			contours.erase(it);
-			it--;
-			i--;
-		}
-		i++;
-	}
-	for (auto c : contours) {
-		namedWindow("cnt", WINDOW_NORMAL);
-		Mat im2 = im.clone();
-		vector<vector<Point>> contoursnow(1);
-		contoursnow[0] = c;
-		draw_points_on_picture(im2, contoursnow);
-		imshow("cnt", im2);
-		waitKey(0);
-	}
-	return contours;
+    const Mat im_gray = to_gray(im);
+
+    Mat thresh;
+    threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
+
+    vector<vector<Point>> contours;
+    vector<Vec4i> hierarchy;
+    findContours(thresh, contours, hierarchy, RETR_TREE, method);
+
+    vector<vector<Point>> merged(contours.size());
+    vector<char> keep(contours.size(), 1);
+    for (size_t i = 0; i < contours.size(); ++i) {
+        merged[i] = contours[i];
+    }
+
+    for (size_t i = 0; i < contours.size(); ++i) {
+        const int parent = hierarchy[i][3];
+        if (parent != -1) {
+            merged[parent].insert(merged[parent].end(), contours[i].begin(), contours[i].end());
+            keep[i] = 0;
+        }
+    }
+
+    vector<vector<Point>> result;
+    result.reserve(contours.size());
+    for (size_t i = 0; i < merged.size(); ++i) {
+        if (keep[i]) {
+            result.push_back(std::move(merged[i]));
+        }
+    }
+
+    return result;
 }
 
-//функция по расчету угла между двумя векторами
+// функция по расчету угла между двумя векторами
 double angleBetween(const Point& a, const Point& b) {
-	double dotProduct = a.x * b.x + a.y * b.y;
-	double magnitudeA = std::sqrt(a.x * a.x + a.y * a.y);
-	double magnitudeB = std::sqrt(b.x * b.x + b.y * b.y);
-	return std::acos(dotProduct / (magnitudeA * magnitudeB));
+    const double magnitudeA = std::sqrt(static_cast<double>(a.x) * a.x + static_cast<double>(a.y) * a.y);
+    const double magnitudeB = std::sqrt(static_cast<double>(b.x) * b.x + static_cast<double>(b.y) * b.y);
+    if (magnitudeA <= 1e-12 || magnitudeB <= 1e-12) {
+        return 0.0;
+    }
+
+    double cosValue = (static_cast<double>(a.x) * b.x + static_cast<double>(a.y) * b.y) / (magnitudeA * magnitudeB);
+    cosValue = clamp_value(cosValue, -1.0, 1.0);
+    return std::acos(cosValue);
 }
-//функция, которая проверяет слева или справа p1 от прямой p-p2
+
+// функция, которая проверяет слева или справа p1 от прямой p-p2
 bool classify_point_by_straight(Point p, Point p1, Point p2) {
-	Point a = p2 - p1;
-	Point b = p - p1;
-	double sa = a.x * b.y - b.x * a.y;
-	if (sa > 0.0) {
-		return false;
-	}
-	else if (sa < 0.0) {
-		return true;
-	}
-	else {
-		return false;
-	}
+    const Point a = p2 - p1;
+    const Point b = p - p1;
+    const double sa = static_cast<double>(a.x) * b.y - static_cast<double>(b.x) * a.y;
+    if (sa > 0.0) {
+        return false;
+    }
+    if (sa < 0.0) {
+        return true;
+    }
+    return false;
 }
-//функция, которая находит угловые точки(и выпуклые и вогнутые)
+
+// функция, которая находит угловые точки (и выпуклые и вогнутые)
 vector<Point> find_corner_points(vector<Point> contour, double threshold1, double threshold2) {
-	vector<Point> corners;
-	ofstream fileo;
-	//fileo.open("filetest2.txt");
-	for (int i = 1; i <= contour.size(); ++i) {
-		int ib = i - 1;
-		int inow = i % contour.size();
-		int ia = (i + 1) % contour.size();
-		Point v1 = { contour[inow].x - contour[ib].x, contour[inow].y - contour[ib].y };
-		Point v2 = { contour[ia].x - contour[inow].x, contour[ia].y - contour[inow].y };
+    vector<Point> corners;
+    if (contour.size() < 3) {
+        return corners;
+    }
 
-		double magnitudeV1 = std::sqrt(v1.x * v1.x + v1.y * v1.y);
-		double magnitudeV2 = std::sqrt(v2.x * v2.x + v2.y * v2.y);
+    corners.reserve(contour.size() / 4 + 1);
+    for (size_t i = 0; i < contour.size(); ++i) {
+        const size_t ib = (i + contour.size() - 1) % contour.size();
+        const size_t inow = i;
+        const size_t ia = (i + 1) % contour.size();
 
-		if (magnitudeV1 > 0 && magnitudeV2 > 0) {
-			//fileo << contour[i + 1].x << " " << contour[i].x << "\n";
-			double angle = angleBetween(v1, v2);
-			if (angle > threshold1 and angle < threshold2) {
-				corners.push_back(contour[i]);
-			}
-		}
-	}
-	//fileo.close();
-	return corners;
+        const Point v1 = contour[inow] - contour[ib];
+        const Point v2 = contour[ia] - contour[inow];
+
+        const double magnitudeV1 = std::sqrt(static_cast<double>(v1.x) * v1.x + static_cast<double>(v1.y) * v1.y);
+        const double magnitudeV2 = std::sqrt(static_cast<double>(v2.x) * v2.x + static_cast<double>(v2.y) * v2.y);
+
+        if (magnitudeV1 > 0.0 && magnitudeV2 > 0.0) {
+            const double angle = angleBetween(v1, v2);
+            if (angle > threshold1 && angle < threshold2) {
+                corners.push_back(contour[inow]);
+            }
+        }
+    }
+
+    return corners;
 }
-//функция, которая выбирает из предыдущей вогнутые точки
+
+// функция, которая выбирает из предыдущей вогнутые точки
 vector<Point> cpe(vector<Point> c) {
-	vector<Point> cpc;
-	//double eps = 0.001;
-	double a1ths = 0.628, a2ths = 2.83;
-	int ki = 1;
-	int j = 0;
-	vector<Point> mcps = find_corner_points(c, a1ths, a2ths);
-	int counter = 0;
-	if (c.size() == 1) {
-		return vector<Point>();
-	}
-	for (int i = 0; i < c.size(); i++) {
+    vector<Point> cpc;
+    if (c.size() < 3) {
+        return cpc;
+    }
 
-		int pre = i, now = (i + 1) % c.size(), next = (i + 2) % c.size();
-		if (j == mcps.size()) {
-			break;
-		}
-		if (c[now] == mcps[j]) {
-			if (classify_point_by_straight(c[pre], c[now], c[next]) == false) {
-				cpc.push_back(c[now]);
-				counter;
-			}
-			j += 1;
-		}
+    const double a1ths = 0.628;
+    const double a2ths = 2.83;
+    const vector<Point> mcps = find_corner_points(c, a1ths, a2ths);
+    if (mcps.empty()) {
+        return cpc;
+    }
 
-	}
-	//cout << cpc.size() << "\n";
-	return cpc;
+    size_t j = 0;
+    for (size_t i = 0; i < c.size() && j < mcps.size(); ++i) {
+        const size_t pre = (i + c.size() - 1) % c.size();
+        const size_t now = i;
+        const size_t next = (i + 1) % c.size();
+
+        if (c[now] == mcps[j]) {
+            if (!classify_point_by_straight(c[pre], c[now], c[next])) {
+                cpc.push_back(c[now]);
+            }
+            ++j;
+        }
+    }
+
+    return cpc;
 }
 
 vector<vector<Point>> make_segments_of_contour(vector<Point> c, vector<Point> cps, pair<int, int> image_size) {
-	vector<vector<Point>> segments(1);
-	if (cps.empty()) {
-		for (int i = 0; i < c.size(); i++) {
-			if (c[i].x != 0 and c[i].x != image_size.first - 1 and c[i].y != 0 and c[i].y != image_size.second - 1) {
-				segments[0].push_back(c[i]);
-			}
-		}
-		return segments;
-	}
-	int j = 0;
-	int paste_i = 0;
-	bool is_at_edge_now = false;
-	for (int i = 0; i < c.size(); i++) {
-		if (cps[j] == c[i]) {
-			if (j == cps.size() - 1) {
-				paste_i = 0;
-			}
-			else {
-				segments.push_back(vector<Point>());
-				paste_i += 1;
-				j += 1;
-			}
-		}
-		if (c[i].x != 0 and c[i].x != image_size.first - 1 and c[i].y != 0 and c[i].y != image_size.second - 1) {
-			is_at_edge_now = false;
-			segments[paste_i].push_back(c[i]);
-		}
-		else {
-			if (not is_at_edge_now) {
-				is_at_edge_now = true;
-				segments.push_back(vector<Point>());
-				paste_i += 1;
-			}
-		}
+    vector<vector<Point>> segments(1);
 
-	}
-	return segments;
+    if (c.empty()) {
+        return segments;
+    }
+
+    if (cps.empty()) {
+        segments[0].reserve(c.size());
+        for (const Point& p : c) {
+            if (is_inner_point(p, image_size)) {
+                segments[0].push_back(p);
+            }
+        }
+        return segments;
+    }
+
+    size_t j = 0;
+    int paste_i = 0;
+    bool is_at_edge_now = false;
+
+    for (size_t i = 0; i < c.size(); ++i) {
+        if (j < cps.size() && cps[j] == c[i]) {
+            if (j == cps.size() - 1) {
+                paste_i = 0;
+            }
+            else {
+                segments.emplace_back();
+                ++paste_i;
+                ++j;
+            }
+        }
+
+        if (is_inner_point(c[i], image_size)) {
+            is_at_edge_now = false;
+            segments[paste_i].push_back(c[i]);
+        }
+        else if (!is_at_edge_now) {
+            is_at_edge_now = true;
+            segments.emplace_back();
+            ++paste_i;
+        }
+    }
+
+    return segments;
 }
 
-void ellipses_selection(const vector<vector<Point>>& segments, 
-	vector<Ellipse> &for_refine, 
-	vector<Ellipse>& for_combine, double disTh, Mat image) {
-	for (int i = 0; i < segments.size(); i++) {
-		if (segments[i].size() > 10) {
-			Ellipse ellipse = Ellipse(segments[i]);
-			if (is_ellipse_for_combine(ellipse, disTh)) {
-				for_combine.push_back(ellipse);
-			}
-			else { 
-				for_refine.push_back(ellipse);
-			}
-			Mat image_clone = image.clone();
-			vector<vector<Ellipse>> for_draw(1, vector<Ellipse>(1, ellipse));
-			vector<vector<Point>> for_draw2(1, ellipse.self_segment);
-			draw_points_on_picture(image_clone, for_draw2);
-			draw_ellipses(image_clone, for_draw);
-			namedWindow("testing", WINDOW_NORMAL);
-			imshow("testing", image_clone);
-			waitKey(0);
-		}
-	}
-}
+void ellipses_selection(const vector<vector<Point>>& segments,
+    vector<Ellipse>& for_refine,
+    vector<Ellipse>& for_combine, double disTh, Mat image) {
+    (void)image;
 
+    for_refine.reserve(for_refine.size() + segments.size());
+    for_combine.reserve(for_combine.size() + segments.size());
+
+    for (const auto& segment : segments) {
+        if (segment.size() <= 15) {
+            continue;
+        }
+
+        Ellipse ellipse(segment);
+        if (ellipse.majorAxisL <= 0.0) {
+            continue;
+        }
+        Mat image_copy = draw_ellipses(image.clone(), { {ellipse} });
+        cout << ellipse.deviation_of_segment << ": deviation_this\n";
+        if (ellipse.deviation_of_segment > 3) {
+            //make_data(cps[0]);
+        //Mat cps_img = draw_points_on_picture(im, cps);
+            namedWindow("out", WINDOW_NORMAL);
+            //namedWindow("cps", WINDOW_NORMAL);
+            //namedWindow("cntrs", WINDOW_NORMAL);
+            //imshow("cntrs", img_contours);
+            //imshow("cps", cps_img);
+            imshow("out", image_copy);
+            waitKey(0);
+
+        }
+        
+        if (is_ellipse_for_combine(ellipse, disTh)) {
+            for_combine.push_back(std::move(ellipse));
+        }
+        else {
+            for_refine.push_back(std::move(ellipse));
+        }
+    }
+}
 
 bool is_ellipse_for_combine(Ellipse ellipse, double disTh) {
-	double eTh = 0;
-	return (ellipse.deviation_of_segment <= disTh and ellipse.Eratio >= eTh);
-	
+    const double eTh = 0.0;
+    return ellipse.deviation_of_segment <= disTh * 100 && ellipse.Eratio >= eTh;
 }
 
 void combine_ellipses(vector<Ellipse>& ellipses, double dminTh, Mat image) {
-	double eps = 0.5;
-	for (int i = 0; i < ellipses.size(); i++) {
-		for (int j = i + 1; j < ellipses.size(); j++) {
+    (void)image;
 
-			vector<Point> Nl;
-			vector<Point> Li = ellipses[i].self_segment;
-			vector<Point> Lj = ellipses[j].self_segment;
-			vector<Point2f> Ei = ellipses[i].contour;
-			vector<Point2f> Ej = ellipses[j].contour;
+    if (ellipses.size() < 2) {
+        return;
+    }
 
-			Nl = Li;
-			for (int k = 0; k < Lj.size(); k++) {
-				Nl.push_back(Lj[k]);
-			}
+    const double kHugePenalty = 1e9;
 
-			if (Li.size() >= 5 and Lj.size() >= 5) {
-				Ellipse new_ellipse = Ellipse(Nl);
+    // Базовые ограничения, но мягкие
+    const double kMinERatio = 0.06;
+    const double kMaxCenterShift = 4.5 * dminTh;
+    const double kMaxOldCenters = 5.5 * dminTh;
+    const double kMaxDeviationAbs = 2.0;
+    const double kMaxDeviationRel = 0.95;
+    const double kMaxAxisGrowth = 3.2;
+    const double kMaxGap = 5.5 * dminTh;
+    const double kMaxAngleDeg = 70.0;              // угол между осями старых эллипсов
 
-				Ellipse ellipsei = ellipses[i];
-				Ellipse ellipsej = ellipses[j];
+    auto length = [](const Point2f& v) -> double {
+        return std::sqrt(static_cast<double>(v.x) * v.x + static_cast<double>(v.y) * v.y);
+        };
 
-				vector<Point2f> Eij = new_ellipse.contour;
-				double dist1 = sqrt(
-					(new_ellipse.center.x - ellipsei.center.x) * (new_ellipse.center.x - ellipsei.center.x) +
-					(new_ellipse.center.y - ellipsei.center.y) * (new_ellipse.center.y - ellipsei.center.y));
-				double dist2 = sqrt(
-					(new_ellipse.center.x - ellipsej.center.x) * (new_ellipse.center.x - ellipsej.center.x) +
-					(new_ellipse.center.y - ellipsej.center.y) * (new_ellipse.center.y - ellipsej.center.y));
-				double dist3 = sqrt(
-					(ellipsei.center.x - ellipsej.center.x) * (ellipsei.center.x - ellipsej.center.x) +
-					(ellipsei.center.y - ellipsej.center.y) * (ellipsei.center.y - ellipsej.center.y));
+    auto ellipse_angle_deg = [&](const Ellipse& e) -> double {
+        Point2f v = e.map1 - e.center;
+        if (length(v) < 1e-9) {
+            return 0.0;
+        }
+        double ang = std::atan2(static_cast<double>(v.y), static_cast<double>(v.x)) * 180.0 / CV_PI;
+        if (ang < 0.0) ang += 180.0;
+        return ang;
+        };
 
-				bool case1 = ((dist1 > dminTh) and (dist2 > dminTh) and (dist3 > 2.5 * dminTh));
-				Mat Ei_coefs = ellipsei.coefficents;
-				Mat Ej_coefs = ellipsej.coefficents;
-				double minA1 = ellipsei.minorAxisL;
-				double minA2 = ellipsej.minorAxisL;
-				double maxA1 = ellipsei.majorAxisL;
-				double maxA2 = ellipsej.majorAxisL;
-				bool case2 = (
-					(minA1 < dminTh) and
-					(minA2 < dminTh) and
-					(fabs(minA1 - minA2) < 0.05 * dminTh) and
-					(fabs(maxA1 - maxA2) < dminTh));
-				bool case3 =
-					fabs(new_ellipse.deviation_of_segment -
-						ellipsei.deviation_of_segment)
-					<= eps and fabs(new_ellipse.deviation_of_segment -
-						ellipsej.deviation_of_segment)
-					<= eps;
-				if (case1 and not (case3 and case2)) {
-					//cout << "bad\n" << case1 << " " << case2 << " " << case3 << "\n";
-					continue;
-				}
-				else if ((case2 or case3) and new_ellipse.majorAxisL <= 250) {
-					//cout << case3 << "norm\n";
-					cout << new_ellipse.deviation_of_segment << "\n";
-					vector<vector<Ellipse>> start_ellipses(1);
-					vector<vector<Ellipse>> end_ellipse(1);
-					start_ellipses[0].push_back(ellipsei);
-					start_ellipses[0].push_back(ellipsej);
-					end_ellipse[0].push_back(new_ellipse);
-					ellipses[i] = new_ellipse;
-					ellipses.erase(ellipses.begin() + j);
-					i = 0;
-					break;
-				}
-				//cout << "a\n";
-			}
-		}
-	}
+    auto angle_diff_deg = [&](double a1, double a2) -> double {
+        double d = std::fabs(a1 - a2);
+        if (d > 90.0) d = 180.0 - d;
+        return d;
+        };
+
+    auto min_segment_distance = [&](const vector<Point>& s1, const vector<Point>& s2) -> double {
+        double best = std::numeric_limits<double>::infinity();
+        for (size_t i = 0; i < s1.size(); ++i) {
+            for (size_t j = 0; j < s2.size(); ++j) {
+                const double dx = static_cast<double>(s1[i].x - s2[j].x);
+                const double dy = static_cast<double>(s1[i].y - s2[j].y);
+                const double d = std::sqrt(dx * dx + dy * dy);
+                if (d < best) {
+                    best = d;
+                }
+            }
+        }
+        return best;
+        };
+
+    auto allowed_deviation = [&](double base_dev) -> double {
+        return std::max(base_dev + kMaxDeviationAbs, base_dev * (1.0 + kMaxDeviationRel));
+        };
+
+    auto score_merge = [&](const Ellipse& e1, const Ellipse& e2, const Ellipse& merged) -> double {
+        if (merged.majorAxisL <= 0.0 || merged.minorAxisL <= 0.0) {
+            return -kHugePenalty;
+        }
+        if (!std::isfinite(merged.deviation_of_segment) || !std::isfinite(merged.Eratio)) {
+            return -kHugePenalty;
+        }
+        if (merged.Eratio < kMinERatio) {
+            return -kHugePenalty;
+        }
+
+        const double old_centers_dist = point_distance(e1.center, e2.center);
+        const double shift1 = point_distance(merged.center, e1.center);
+        const double shift2 = point_distance(merged.center, e2.center);
+        const double gap = min_segment_distance(e1.self_segment, e2.self_segment);
+
+        const double ang1 = ellipse_angle_deg(e1);
+        const double ang2 = ellipse_angle_deg(e2);
+        const double angm = ellipse_angle_deg(merged);
+
+        const double old_angle_diff = angle_diff_deg(ang1, ang2);
+        const double merged_to_1 = angle_diff_deg(angm, ang1);
+        const double merged_to_2 = angle_diff_deg(angm, ang2);
+
+        const double max_old_major = std::max(e1.majorAxisL, e2.majorAxisL);
+        const double max_old_minor = std::max(e1.minorAxisL, e2.minorAxisL);
+
+        const double old_best = std::min(e1.deviation_of_segment, e2.deviation_of_segment);
+        const double old_avg = 0.5 * (e1.deviation_of_segment + e2.deviation_of_segment);
+        const double dev_limit = allowed_deviation(old_best);
+
+        // Оставляем только реально аварийные отбрасывания
+        if (gap > 7.0 * dminTh) {
+            return -kHugePenalty;
+        }
+        if (merged.majorAxisL > 3.8 * max_old_major) {
+            return -kHugePenalty;
+        }
+        if (merged.deviation_of_segment > dev_limit + 2.0) {
+            return -kHugePenalty;
+        }
+
+        double score = 0.0;
+
+        // Главный критерий: merged должен быть не сильно хуже старых
+        score += 6.0 * (old_avg - merged.deviation_of_segment);
+
+        // Близость сегментов
+        score += 2.4 * (1.0 - std::min(gap / std::max(1.0, 5.0 * dminTh), 1.0));
+
+        // Похожесть направлений
+        score += 1.4 * (1.0 - std::min(old_angle_diff / 70.0, 1.0));
+        score += 0.9 * (1.0 - std::min((merged_to_1 + merged_to_2) / 120.0, 1.0));
+
+        // Штрафы вместо жёстких запретов
+        score -= 0.18 * old_centers_dist / std::max(1.0, 4.5 * dminTh);
+        score -= 0.22 * (shift1 + shift2) / std::max(1.0, 4.5 * dminTh);
+
+        score -= 0.30 * std::max(0.0, (merged.majorAxisL - max_old_major) / std::max(1.0, max_old_major));
+        score -= 0.18 * std::max(0.0, (merged.minorAxisL - max_old_minor) / std::max(1.0, max_old_minor));
+
+        const double major_diff_norm =
+            std::fabs(e1.majorAxisL - e2.majorAxisL) / std::max(1.0, max_old_major);
+        const double minor_diff_norm =
+            std::fabs(e1.minorAxisL - e2.minorAxisL) / std::max(1.0, max_old_minor);
+
+        score -= 0.15 * major_diff_norm;
+        score -= 0.10 * minor_diff_norm;
+
+        // Небольшой бонус, если merged реально улучшает фит
+        if (merged.deviation_of_segment < old_best) {
+            score += 0.8;
+        }
+
+        return score;
+        };
+
+    bool merged_any = true;
+    while (merged_any) {
+        merged_any = false;
+
+        double best_score = 0.0;
+        size_t best_i = 0;
+        size_t best_j = 0;
+        Ellipse best_merged(vector<Point>{});
+
+        for (size_t i = 0; i < ellipses.size(); ++i) {
+            if (ellipses[i].self_segment.size() < 5 || ellipses[i].majorAxisL <= 0.0) {
+                continue;
+            }
+
+            for (size_t j = i + 1; j < ellipses.size(); ++j) {
+                if (ellipses[j].self_segment.size() < 5 || ellipses[j].majorAxisL <= 0.0) {
+                    continue;
+                }
+
+                vector<Point> merged_segment;
+                merged_segment.reserve(ellipses[i].self_segment.size() + ellipses[j].self_segment.size());
+                merged_segment.insert(merged_segment.end(),
+                    ellipses[i].self_segment.begin(), ellipses[i].self_segment.end());
+                merged_segment.insert(merged_segment.end(),
+                    ellipses[j].self_segment.begin(), ellipses[j].self_segment.end());
+
+                Ellipse merged_ellipse(merged_segment);
+                const double score = score_merge(ellipses[i], ellipses[j], merged_ellipse);
+
+                if (score > best_score) {
+                    best_score = score;
+                    best_i = i;
+                    best_j = j;
+                    best_merged = std::move(merged_ellipse);
+                }
+            }
+        }
+
+        // Порог merge: только реально полезные объединения
+        if (best_score > 0.01) {
+            ellipses[best_i] = std::move(best_merged);
+            ellipses.erase(ellipses.begin() + static_cast<vector<Ellipse>::difference_type>(best_j));
+            merged_any = true;
+        }
+    }
 }
 
-void refine_ellipses(vector<Ellipse> &refine_segments, vector<Ellipse>& ellipses, Mat image) {
-	double disThRe = 1;
-	//std::cout << refine_segments.size() << "\n";
-	//std::cout << ellipses.size() << "\n";
-	for (int i = 0; i < refine_segments.size(); i++) {
-		double mn_dist = INFINITY;
-		Ellipse best_ellipse = Ellipse(vector<Point>());
-		int index = 0;
-		for (int j = 0; j < ellipses.size(); j++) {
-			vector<Point> new_segment = ellipses[j].self_segment;
-			for (Point p : refine_segments[i].self_segment) {
-				new_segment.push_back(p);
-			}
-			Ellipse new_ellipse = Ellipse(new_segment);
-			double dist = new_ellipse.deviation_of_segment;
-			cout << dist << " dst" << "\n";
-			/*Mat image_clone = image.clone();
-			vector<vector<Ellipse>> for_draw(1, vector<Ellipse>(1, new_ellipse));
-			vector<vector<Point>> for_draw2(1, new_ellipse.self_segment);
-			draw_ellipses(image_clone, for_draw);
-			draw_points_on_picture(image_clone, for_draw2);
-			namedWindow("testing", WINDOW_NORMAL);
-			imshow("testing", image_clone);
-			waitKey(0);*/
-			if (dist < mn_dist) {
-				//cout << dist << " dst" << "\n";
-				mn_dist = dist;
-				best_ellipse = new_ellipse;
-				index = j;
-			}
-		}
-		if (mn_dist < disThRe) {
-			ellipses[index] = best_ellipse;
-			cout << mn_dist << "\n";
-		}
-	}
+
+void refine_ellipses(vector<Ellipse>& refine_segments, vector<Ellipse>& ellipses, Mat image) {
+    (void)image;
+    refine_ellipses_impl(refine_segments, ellipses);
 }
 
+void refine_ellipses(vector<vector<Point>>& refine_segments, vector<Ellipse>& ellipses) {
+    vector<Ellipse> prepared;
+    prepared.reserve(refine_segments.size());
+    for (const auto& segment : refine_segments) {
+        if (segment.size() >= 5) {
+            prepared.emplace_back(segment);
+        }
+    }
+    refine_ellipses_impl(prepared, ellipses);
+}
 
-//функция, находящая вогнутые точки из картинки(в чем и заключается задача)
+// функция, находящая все вогнутые точки из картинки
 vector<vector<Point>> find_all_concave_points(Mat im, double approx_thresh, int binary_thresh) {
-	Mat im_gray;
-	cvtColor(im, im_gray, COLOR_BGR2GRAY);
-	Mat thresh;
-	threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
-	vector<vector<Point>> contours;
-	vector<Vec4i> hierarchy;
-	findContours(thresh, contours, hierarchy, RETR_TREE, 3);
-	for (int i = 0; i < contours.size(); i++) {
-		vector<Point> now_contour;
-		vector<Point> c1 = contours[i];
-		approxPolyDP(contours[i], now_contour, approx_thresh, true);
-		if (i == 1) {
-			contours = vector<vector<Point>>(1);
-			//contours[0] = make_segments_of_contour(c1, cpe(now_contour))[4];
-		}
-	}
+    const Mat im_gray = to_gray(im);
 
+    Mat thresh;
+    threshold(im_gray, thresh, binary_thresh, 255, THRESH_BINARY);
 
-	return contours;
+    vector<vector<Point>> contours;
+    vector<Vec4i> hierarchy;
+    findContours(thresh, contours, hierarchy, RETR_TREE, CHAIN_APPROX_TC89_KCOS);
+
+    vector<vector<Point>> result;
+    result.reserve(contours.size());
+
+    for (const auto& contour : contours) {
+        vector<Point> approx_contour;
+        approxPolyDP(contour, approx_contour, approx_thresh, true);
+        vector<Point> concave_points = cpe(approx_contour);
+        if (!concave_points.empty()) {
+            result.push_back(std::move(concave_points));
+        }
+    }
+
+    return result;
 }
 
 Mat draw_ellipses(Mat im, vector<vector<Ellipse>> ellipses) {
-	try {
-		for (int i = 0; i < ellipses.size(); i++) {
-			for (int j = 0; j < ellipses[i].size(); j++) {
-				int index = 0;
-				int size_contour = ellipses[i][j].contour.size();
-				//circle(im, ellipses[i][j].center_circle, ellipses[i][j].r_circle, (100, 255, 55), 1);
-				for (Point2f p : ellipses[i][j].contour) {
-					int y = p.y;
-					int x = p.x;
-					//cout << x << " " << y << "\n";
-					if (y > 0 and x > 0 and y < im.rows and x < im.cols) {
-						im.at<Vec3b>(y, x) = Vec3b(0, 255, 0);
-					}
-					index += 1;
-				}
-				/*im.at<Vec3b>(ellipses[i][j].map1.y, ellipses[i][j].map1.x) = Vec3b(255, 0, 0);
-				im.at<Vec3b>(ellipses[i][j].map2.y, ellipses[i][j].map2.x) = Vec3b(255, 0, 0);
-				im.at<Vec3b>(ellipses[i][j].mip1.y, ellipses[i][j].mip1.x) = Vec3b(255, 0, 0);
-				im.at<Vec3b>(ellipses[i][j].mip2.y, ellipses[i][j].mip2.x) = Vec3b(255, 0, 0);
-				*/
-			}
+    for (const auto& ellipse_group : ellipses) {
+        for (const auto& ellipse : ellipse_group) {
+            if (ellipse.contour.size() < 2) {
+                continue;
+            }
 
-		}
-	}
+            vector<Point> polyline;
+            polyline.reserve(ellipse.contour.size());
+            for (const Point2f& p : ellipse.contour) {
+                polyline.emplace_back(cvRound(p.x), cvRound(p.y));
+            }
+            polylines(im, polyline, true, Scalar(0, 0, 255), 3, LINE_8);
+        }
+    }
 
-	catch (...){}
-	return im;
+    return im;
 }
 
-//функция по рисованию вогнутых точек на картинке зеленым цветом
-void draw_points_on_picture(Mat &im, vector<vector<Point>> cps) {
-	for (int i = 0; i < cps.size(); i++) {
-		for (int j = 0; j < cps[i].size(); j++) {
-			im.at<Vec3b>(cps[i][j].y, cps[i][j].x) = Vec3b(0, 0, 255);
-		}
-	}
+// функция по рисованию вогнутых точек на картинке красным цветом
+void draw_points_on_picture(Mat& im, vector<vector<Point>> cps) {
+    for (const auto& contour_points : cps) {
+        for (const Point& p : contour_points) {
+            if (p.y >= 0 && p.x >= 0 && p.y < im.rows && p.x < im.cols) {
+                im.at<Vec3b>(p.y, p.x) = Vec3b(0, 0, 255);
+            }
+        }
+    }
 }
 
 vector<vector<Ellipse>> main_func(Mat im, float approx_thresh, int binary_thresh, double dTh, double disTh, double dminTh, string imgname) {
-	clock_t start = clock();
-	vector<vector<Ellipse>> all_ellipses;
-	vector<vector<vector<Point>>> segments = contour_processing_return_segments(im, binary_thresh, 3, 1, approx_thresh);
-	for (int i = 0; i < segments.size(); i++) {
-		vector<Ellipse> for_combine;
-		vector<Ellipse> for_refine;
-		vector<Ellipse> ellipses;
-		ellipses_selection(segments[i], for_refine, for_combine, disTh, im.clone());
-		combine_ellipses(for_combine, dminTh, im);
-		refine_ellipses(for_refine, for_combine, im);
-		all_ellipses.push_back(for_combine);
-		//all_ellipses.push_back(for_refine);
-		//all_ellipses.push_back(af_ref);
-		Mat imcopytime = im.clone();
-		vector<vector<Point>> now_all_contour;
-		//now_all_contour.push_back(c1);
-		//draw_points_on_picture(imcopytime, cps);
-		/*namedWindow("try", WINDOW_NORMAL);
-		imshow("try", imcopytime);
-		waitKey(0);*/
-	}
-	clock_t end = clock();
-	cout << (double)(end - start) / CLOCKS_PER_SEC << "seconds\n";
-	//Mat impre = draw_ellipses(im.clone(), pre_ellipses);
-	Mat imcps = im.clone();
-	//draw_points_on_picture(imcps, cps);
-	//imshow("pre", impre);
-	//imwrite("test_res/" + imgname.substr(0, imgname.size() - 4) + "/pre_" + to_string(binary_thresh) + imgname, impre);
-	//imshow("cps", imcps);
-	return all_ellipses;
+    (void)dTh;
+    (void)imgname;
+
+    const clock_t start = clock();
+    vector<vector<Ellipse>> all_ellipses;
+
+    vector<vector<vector<Point>>> segments = contour_processing_return_segments(im, binary_thresh, CHAIN_APPROX_TC89_KCOS, CHAIN_APPROX_NONE, approx_thresh);
+    all_ellipses.reserve(segments.size());
+
+    for (const auto& contour_segments : segments) {
+        vector<Ellipse> for_combine;
+        vector<Ellipse> for_refine;
+        ellipses_selection(contour_segments, for_refine, for_combine, disTh, im);
+        combine_ellipses(for_combine, dminTh, im);
+        all_ellipses.push_back(std::move(for_combine));
+    }
+
+    const clock_t end = clock();
+    cout << static_cast<double>(end - start) / CLOCKS_PER_SEC << "seconds\n";
+    return all_ellipses;
 }
 
 Mat prepare_im(Mat im_binary) {
-	int w = 0, b = 0;
-	Mat im_inverted = Mat(im_binary.rows, im_binary.cols, CV_8UC1);
-
-	for (int i = 0; i < im_binary.rows; i++) {
-		for (int j = 0; j < im_binary.cols; j++) {
-			if (im_binary.at<__int8>(i, j) == 0) b += 1;
-			else w += 1;
-			im_inverted.at<__int8>(i, j) = 255 - im_binary.at<__int8>(i, j);
-		}
-	}
-	if (w > b) return im_inverted;
-	return im_binary;
+    const int white = countNonZero(im_binary);
+    const int black = static_cast<int>(im_binary.total()) - white;
+    if (white > black) {
+        Mat inverted;
+        bitwise_not(im_binary, inverted);
+        return inverted;
+    }
+    return im_binary.clone();
 }
-

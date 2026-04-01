@@ -77,9 +77,10 @@ int main(int argc, char** args)
 	//C319.jpg
 	//camera_1_2023-12-12_18-22-44_029.tif.png
 	//testing();
-	double dTh = 3.5, dminTh = 30, disTh = 1.5; 
+	double dTh = 3.5, dminTh = 30, disTh = 2.5; 
 	//testing_2();
-	string filename = "N009_1mminid.jpg";
+	string filename = "N009_1m.jpg";
+	//string filename = "N009_1mminid.jpg";
     Mat im = imread(filename);
 	//cout << im.cols << " " << im.rows << "\n";
     vector<vector<Ellipse>> ellipses = main_func(im, 3, 40, dTh, disTh, dminTh, filename);

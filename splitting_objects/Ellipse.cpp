@@ -1,260 +1,366 @@
 ﻿#include "Ellipse.h"
 
+#include <algorithm>
+#include <limits>
+#include <stdexcept>
+
 using namespace std;
 using namespace cv;
 
+namespace {
+    constexpr double kEps = 1e-12;
+    constexpr int kDistanceSearchIterations = 36;
+
+    inline double sqr(double value) {
+        return value * value;
+    }
+
+    inline bool is_valid_positive(double value) {
+        return std::isfinite(value) && value > kEps;
+    }
+
+    template <typename T>
+    inline const T& clamp_value(const T& value, const T& low, const T& high) {
+        return value < low ? low : (value > high ? high : value);
+    }
+
+    double point_to_axis_aligned_ellipse_distance_sq(double x, double y, double a, double b) {
+        x = std::abs(x);
+        y = std::abs(y);
+
+        if (!is_valid_positive(a) || !is_valid_positive(b)) {
+            return std::numeric_limits<double>::infinity();
+        }
+
+        if (a < b) {
+            std::swap(a, b);
+            std::swap(x, y);
+        }
+
+        auto distance_sq = [x, y, a, b](double t) {
+            const double ct = std::cos(t);
+            const double st = std::sin(t);
+            const double dx = a * ct - x;
+            const double dy = b * st - y;
+            return dx * dx + dy * dy;
+            };
+
+        double left = 0.0;
+        double right = CV_PI * 0.5;
+
+        for (int iter = 0; iter < kDistanceSearchIterations; ++iter) {
+            const double third = (right - left) / 3.0;
+            const double m1 = left + third;
+            const double m2 = right - third;
+            if (distance_sq(m1) <= distance_sq(m2)) {
+                right = m2;
+            }
+            else {
+                left = m1;
+            }
+        }
+
+        return distance_sq((left + right) * 0.5);
+    }
+
+    void reset_invalid_ellipse(Ellipse& ellipse) {
+        ellipse.contour.clear();
+        ellipse.coefficents = Mat::zeros(6, 1, CV_64F);
+        ellipse.Eratio = 0.0;
+        ellipse.minorAxisL = 0.0;
+        ellipse.majorAxisL = 0.0;
+        ellipse.square = 0.0;
+        ellipse.deviation_of_segment = 100.0;
+        ellipse.center = Point2f(0.f, 0.f);
+        ellipse.map1 = Point2f(0.f, 0.f);
+        ellipse.map2 = Point2f(0.f, 0.f);
+        ellipse.mip1 = Point2f(0.f, 0.f);
+        ellipse.mip2 = Point2f(0.f, 0.f);
+    }
+} // namespace
+
 void print_mat(Mat mat) {
-	for (int i = 0; i < mat.rows; i++) {
-		for (int j = 0; j < mat.cols; j++) {
-			cout << mat.at<double>(i, j) << " ";
-		}
-		cout << "\n";
-	}
+    for (int i = 0; i < mat.rows; i++) {
+        for (int j = 0; j < mat.cols; j++) {
+            cout << mat.at<double>(i, j) << " ";
+        }
+        cout << "\n";
+    }
 }
 
 void print_eigmat(Eigen::MatrixXcd mat) {
-	for (int i = 0; i < 3; i++) {
-		for (int j = 0; j < 3; j++) {
-			cout << mat(i, j) << " ";
-		}
-		cout << "\n";
-	}
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            cout << mat(i, j) << " ";
+        }
+        cout << "\n";
+    }
 }
 
 Ellipse::Ellipse(vector<Point> segment) {
-	self_segment = segment;
-	if (segment.size() >= 5) {
-		make_data(segment);
-		try{
-			calculate_coefs();
-			make_self_contour();
-			coefficents = coefficents;
-			calc_self_deviation();
-		}
-		catch (...) {
-			//vector<Point> print_segment = read_data();
-			//cout << "trouble\n";
-		}
-	}
+    self_segment = std::move(segment);
+    coefficents = Mat::zeros(6, 1, CV_64F);
+
+    if (self_segment.size() < 5) {
+        return;
+    }
+
+    try {
+        calculate_coefs();
+        make_self_contour();
+        if (is_valid_positive(square)) {
+            coefficents = coefficents / square;
+        }
+        calc_self_deviation();
+    }
+    catch (...) {
+        reset_invalid_ellipse(*this);
+    }
 }
+
 void Ellipse::calculate_coefs() {
-	Mat XY = Mat(self_segment.size(), 2, CV_64F);
-	int i = 0;
-	double cx = 0, cy = 0;
-	for (Point p : self_segment) {
-		cx += p.x;
-		cy += p.y;
-		XY.at<double>(i, 0) = p.x;
-		XY.at<double>(i, 1) = p.y;
-		i += 1;
-	}
-	cx /= self_segment.size();
-	cy /= self_segment.size();
-	//cout << cx << " "<< cy << "\n";
-	// Calculate the centroid of the data set
+    const int n = static_cast<int>(self_segment.size());
+    if (n < 5) {
+        throw std::runtime_error("Not enough points for ellipse fitting");
+    }
 
-	// Construct matrices D1 and D2
-	cv::Mat D1(XY.rows, 3, CV_64F);
-	cv::Mat D2(XY.rows, 3, CV_64F);
-	for (int i = 0; i < XY.rows; ++i) {
-		double x = XY.at<double>(i, 0);
-		double y = XY.at<double>(i, 1);
-		D1.at<double>(i, 0) = (x - cx) * (x - cx);
-		D1.at<double>(i, 1) = (x - cx) * (y - cy);
-		D1.at<double>(i, 2) = (y - cy) * (y - cy);
-		D2.at<double>(i, 0) = x - cx;
-		D2.at<double>(i, 1) = y - cy;
-		D2.at<double>(i, 2) = 1.0;
-	}
-	// 3. Âû÷èñëåíèå S1, S2 è S3
-	Mat S1 = D1.t() * D1;  // D1' * D1
-	Mat S2 = D1.t() * D2;  // D1' * D2
-	Mat S3 = D2.t() * D2;  // D2' * D2
-	// 4. Âû÷èñëåíèå T
-	Mat T = -S3.inv() * S2.t();  // -inv(S3) * S2'
+    double cx = 0.0;
+    double cy = 0.0;
+    for (const Point& p : self_segment) {
+        cx += p.x;
+        cy += p.y;
+    }
+    cx /= n;
+    cy /= n;
 
-	// 5. Ñîçäàíèå ìàòðèöû M
-	Mat M = S1 + S2 * T;
-	// 6. Ïîäãîòîâêà M â òðåáóåìîì ôîðìàòå
-	Eigen::MatrixXd E_M(3, M.cols);
-	Mat M_final = Mat(3, M.cols, CV_64F);
-	for (int i = 0; i < M.cols; i++) {
-		E_M(0, i) = M.at<double>(2, i) / 2;
-		E_M(1, i) = -M.at<double>(1, i);
-		E_M(2, i) = M.at<double>(0, i) / 2;
-		M_final.at<double>(0, i) = M.at<double>(2, i) / 2;
-		M_final.at<double>(1, i) = M.at<double>(1, i) * (-1);
-		M_final.at<double>(2, i) = M.at<double>(0, i) / 2;
-	}
+    Mat D1(n, 3, CV_64F);
+    Mat D2(n, 3, CV_64F);
 
-	// 7. Âû÷èñëåíèå ñîáñòâåííûõ âåêòîðîâ è çíà÷åíèé
-	Eigen::EigenSolver<Eigen::MatrixXd> eigenSolver(E_M);
-	Mat evec, eval;
-	Eigen::MatrixXcd eigenvectors = eigenSolver.eigenvectors();
-	//cv::eigenNonSymmetric(M_final, eval, evec);
-	evec = Mat(eigenvectors.rows(), eigenvectors.cols(), CV_64F);
-	//print_eigmat(eigenvectors);
+    for (int i = 0; i < n; ++i) {
+        const double x = self_segment[i].x - cx;
+        const double y = self_segment[i].y - cy;
 
-	for (int j = 0; j < eigenvectors.cols(); j++) {
-		for (int i = 0; i < eigenvectors.rows(); i++) {
-			if (j == 0) {
-				evec.at<double>(i, j) = -eigenvectors(i, eigenvectors.cols() - 1).real();
-			}
-			else {
-				if (j - 1 == 0) {
-					evec.at<double>(i, j) = eigenvectors(i, j - 1).real();
-				}
-				else {
-					evec.at<double>(i, j) = -eigenvectors(i, j - 1).real();
-				}
-			}
-		}
-	}
-	//print_mat(evec);
+        D1.at<double>(i, 0) = x * x;
+        D1.at<double>(i, 1) = x * y;
+        D1.at<double>(i, 2) = y * y;
+        D2.at<double>(i, 0) = x;
+        D2.at<double>(i, 1) = y;
+        D2.at<double>(i, 2) = 1.0;
+    }
 
-	// 8. Ïðîöåññ èçâëå÷åíèÿ íóæíûõ ñîáñòâåííûõ âåêòîðîâ
-	Mat A1;
-	Mat cond = 4 * evec.row(0).mul(evec.row(2)) - evec.row(1).mul(evec.row(1));
-	//print_mat(cond);
-	for (int i = 0; i < cond.cols; i++) {
-		if (cond.at<double>(0, i) > 0) {
-			A1.push_back(evec.col(i));
-		}
-	}
-	//print_mat(A1);
-	// 9. Ñîçäàíèå A
-	Mat A = A1;
-	Mat TA1 = T * A1;
+    const Mat S1 = D1.t() * D1;
+    const Mat S2 = D1.t() * D2;
+    const Mat S3 = D2.t() * D2;
 
-	for (int i = 0; i < A1.rows; i++) {
-		A.push_back(TA1.row(i));
-	}
-	//print_mat(A);
-	/*for (int i = 0; i < A.rows; i++) {
-		cout << A.at<double>(i, 0) << "\n";
-	}*/
-	double A3 = A.at<double>(3, 0) - 2 * A.at<double>(0, 0) * cx - A.at<double>(1, 0) * cy;
-	double A4 = A.at<double>(4, 0) - 2 * A.at<double>(2, 0) * cy - A.at<double>(1, 0) * cx;
-	double A5 = A.at<double>(5, 0) + A.at<double>(0, 0) * cx * cx + A.at<double>(2, 0) * cy * cy + A.at<double>(1, 0) * cx * cy - A.at<double>(3) * cx - A.at<double>(4) * cy;
-	A.at<double>(3, 0) = A3;
-	A.at<double>(4, 0) = A4;
-	A.at<double>(5, 0) = A5;
-	// Normalize A
-	//A = A / norm(A);
-	coefficents = A;
+    Mat T;
+    if (!solve(S3, -S2.t(), T, DECOMP_SVD)) {
+        throw std::runtime_error("Failed to solve ellipse fitting system");
+    }
+
+    const Mat M = S1 + S2 * T;
+
+    Eigen::Matrix3d E_M;
+    for (int i = 0; i < 3; ++i) {
+        E_M(0, i) = M.at<double>(2, i) * 0.5;
+        E_M(1, i) = -M.at<double>(1, i);
+        E_M(2, i) = M.at<double>(0, i) * 0.5;
+    }
+
+    Eigen::EigenSolver<Eigen::Matrix3d> eigenSolver(E_M);
+    const Eigen::MatrixXcd eigenvectors = eigenSolver.eigenvectors();
+
+    Mat evec(3, 3, CV_64F);
+    for (int j = 0; j < eigenvectors.cols(); ++j) {
+        for (int i = 0; i < eigenvectors.rows(); ++i) {
+            if (j == 0) {
+                evec.at<double>(i, j) = -eigenvectors(i, eigenvectors.cols() - 1).real();
+            }
+            else if (j == 1) {
+                evec.at<double>(i, j) = eigenvectors(i, 0).real();
+            }
+            else {
+                evec.at<double>(i, j) = -eigenvectors(i, j - 1).real();
+            }
+        }
+    }
+
+    int valid_col = -1;
+    for (int i = 0; i < evec.cols; ++i) {
+        const double a = evec.at<double>(0, i);
+        const double b = evec.at<double>(1, i);
+        const double c = evec.at<double>(2, i);
+        if (4.0 * a * c - b * b > 0.0) {
+            valid_col = i;
+            break;
+        }
+    }
+
+    if (valid_col < 0) {
+        throw std::runtime_error("No valid ellipse eigenvector found");
+    }
+
+    const Mat A1 = evec.col(valid_col).clone();
+    const Mat TA1 = T * A1;
+
+    Mat A(6, 1, CV_64F);
+    for (int i = 0; i < 3; ++i) {
+        A.at<double>(i, 0) = A1.at<double>(i, 0);
+        A.at<double>(i + 3, 0) = TA1.at<double>(i, 0);
+    }
+
+    const double A0 = A.at<double>(0, 0);
+    const double B0 = A.at<double>(1, 0);
+    const double C0 = A.at<double>(2, 0);
+    const double D0 = A.at<double>(3, 0);
+    const double E0 = A.at<double>(4, 0);
+    const double F0 = A.at<double>(5, 0);
+
+    A.at<double>(3, 0) = D0 - 2.0 * A0 * cx - B0 * cy;
+    A.at<double>(4, 0) = E0 - 2.0 * C0 * cy - B0 * cx;
+    A.at<double>(5, 0) = F0 + A0 * cx * cx + C0 * cy * cy + B0 * cx * cy - D0 * cx - E0 * cy;
+
+    coefficents = A;
 }
+
 void Ellipse::make_self_contour() {
-	double A = coefficents.at<double>(0);
-	double B = coefficents.at<double>(1);
-	double C = coefficents.at<double>(2);
-	double D = coefficents.at<double>(3);
-	double E = coefficents.at<double>(4);
-	double F = coefficents.at<double>(5);
-	double e = 4 * A * C - B * B;
+    contour.clear();
 
-	double x0 = (B * E - 2 * C * D) / e;
-	double y0 = (B * D - 2 * A * E) / e;
-	center = Point2f(x0, y0);
-	double F0 = -2 * (A * x0 * x0 + B * x0 * y0 + C * y0 * y0 + D * x0 + E * y0 + F);
-	double g = sqrt((A - C) * (A - C) + B * B);
-	double a = F0 / (A + C + g);
-	double b = F0 / (A + C - g);
-	a = sqrt(a);
-	b = sqrt(b);
-	minorAxisL = 2 * min(a, b);
-	majorAxisL = 2 * max(a, b);
-	Eratio = minorAxisL / majorAxisL;
-	double t = 0.5 * atan2(B, A - C);
-	double ct = cos(t); double st = sin(t);
-	if (a > b) {
-		map1 = Point2f( x0 + a * ct, y0 + a * st );
-		map2 = Point2f( x0 - a * ct, y0 - a * st );
-		mip1 = Point2f( x0 - b * st, y0 + b * ct );
-		mip2 = Point2f( x0 + b * st, y0 - b * ct );
-	}
-	else {
-		mip1 = Point2f( x0 + a * ct, y0 + a * st );
-		mip2 = Point2f( x0 - a * ct, y0 - a * st );
-		map1 = Point2f( x0 - b * st, y0 + b * ct );
-		map2 = Point2f( x0 + b * st, y0 - b * ct );
-	}
-	int num = 50;
-	double step = 0.2 * M_PI / num;
-	for (double i = 0; i <= num; i += step) {
-		double x;
-		double y;
-		double cp = cos(i); double sp = sin(i);
-		// ïðèìåíÿåì ïîâîðîò
-		x = x0 + a * ct * cp - b * st * sp;
-		y = y0 + a * st * cp + b * ct * sp;
+    const double A = coefficents.at<double>(0, 0);
+    const double B = coefficents.at<double>(1, 0);
+    const double C = coefficents.at<double>(2, 0);
+    const double D = coefficents.at<double>(3, 0);
+    const double E = coefficents.at<double>(4, 0);
+    const double F = coefficents.at<double>(5, 0);
 
-		// ñìåùàåì â öåíòð
-		contour.push_back(Point2f(x, y));
-	}
-	square = M_PI * minorAxisL * majorAxisL / 4;
+    const double e = 4.0 * A * C - B * B;
+    if (std::abs(e) <= kEps) {
+        throw std::runtime_error("Degenerate conic");
+    }
+
+    const double x0 = (B * E - 2.0 * C * D) / e;
+    const double y0 = (B * D - 2.0 * A * E) / e;
+    center = Point2f(static_cast<float>(x0), static_cast<float>(y0));
+
+    const double F0 = -2.0 * (A * x0 * x0 + B * x0 * y0 + C * y0 * y0 + D * x0 + E * y0 + F);
+    const double g = std::sqrt((A - C) * (A - C) + B * B);
+    const double denom1 = A + C + g;
+    const double denom2 = A + C - g;
+
+    if (std::abs(denom1) <= kEps || std::abs(denom2) <= kEps) {
+        throw std::runtime_error("Invalid ellipse axes denominator");
+    }
+
+    const double a_sq = F0 / denom1;
+    const double b_sq = F0 / denom2;
+    if (a_sq <= kEps || b_sq <= kEps) {
+        throw std::runtime_error("Invalid ellipse axes");
+    }
+
+    const double a = std::sqrt(a_sq);
+    const double b = std::sqrt(b_sq);
+
+    minorAxisL = 2.0 * std::min(a, b);
+    majorAxisL = 2.0 * std::max(a, b);
+    if (!is_valid_positive(minorAxisL) || !is_valid_positive(majorAxisL)) {
+        throw std::runtime_error("Non-positive ellipse axes");
+    }
+
+    Eratio = minorAxisL / majorAxisL;
+
+    const double t = 0.5 * std::atan2(B, A - C);
+    const double ct = std::cos(t);
+    const double st = std::sin(t);
+
+    if (a > b) {
+        map1 = Point2f(static_cast<float>(x0 + a * ct), static_cast<float>(y0 + a * st));
+        map2 = Point2f(static_cast<float>(x0 - a * ct), static_cast<float>(y0 - a * st));
+        mip1 = Point2f(static_cast<float>(x0 - b * st), static_cast<float>(y0 + b * ct));
+        mip2 = Point2f(static_cast<float>(x0 + b * st), static_cast<float>(y0 - b * ct));
+    }
+    else {
+        mip1 = Point2f(static_cast<float>(x0 + a * ct), static_cast<float>(y0 + a * st));
+        mip2 = Point2f(static_cast<float>(x0 - a * ct), static_cast<float>(y0 - a * st));
+        map1 = Point2f(static_cast<float>(x0 - b * st), static_cast<float>(y0 + b * ct));
+        map2 = Point2f(static_cast<float>(x0 + b * st), static_cast<float>(y0 - b * ct));
+    }
+
+    const int num = clamp_value(static_cast<int>(std::ceil(CV_PI * std::max(a, b))), 72, 360);
+    contour.reserve(num);
+    const double step = 2.0 * CV_PI / static_cast<double>(num);
+
+    for (int i = 0; i < num; ++i) {
+        const double angle = i * step;
+        const double cp = std::cos(angle);
+        const double sp = std::sin(angle);
+        const double x = x0 + a * ct * cp - b * st * sp;
+        const double y = y0 + a * st * cp + b * ct * sp;
+        contour.emplace_back(static_cast<float>(x), static_cast<float>(y));
+    }
+
+    square = CV_PI * minorAxisL * majorAxisL * 0.25;
+    if (!is_valid_positive(square)) {
+        throw std::runtime_error("Invalid ellipse area");
+    }
 }
+
 void Ellipse::calc_self_deviation() {
-	double dis = 0;
-	double disexp = 0;
-	double A = coefficents.at<double>(0);
-	double B = coefficents.at<double>(1);
-	double C = coefficents.at<double>(2);
-	double D = coefficents.at<double>(3);
-	double E = coefficents.at<double>(4);
-	double F = coefficents.at<double>(5);
-	double a, b, c, p, S, r;
-	c = sqrt(pow(map1.x - map2.x, 2) + pow(map1.y - map2.y, 2));
-	a = sqrt(pow(mip1.x - map1.x, 2) + pow(mip1.y - map1.y, 2));
-	b = sqrt(pow(mip1.x - map2.x, 2) + pow(mip1.y - map2.y, 2));
-	p = (a + b + c) / 2;
-	S = sqrt(p * (p - a) * (p - b) * (p - c));
-	r = a * b * c / 4 / S;
-	cout << "radius : " << r << "\n";
-	for (Point p : self_segment) {
-		int x = p.x, y = p.y;
-		double min_dist = INFINITY;
-		for (Point2f pc : contour) {
-			int xc = pc.x, yc = pc.y;
-			double now_dist = sqrt(pow(y - yc, 2) + pow(x - xc, 2));
-			if (now_dist < min_dist) min_dist = now_dist;
-		}
-		dis += min_dist;
-		double d1 = sqrt(pow(mip1.x - x, 2) + pow(mip1.y - y, 2)), d2 = sqrt(pow(mip2.x - x, 2) + pow(mip2.y - y, 2));
-		/*if (d1 >= d2) {
-			Point timepoint = mip1;
-			mip1 = mip2;
-			mip2 = timepoint;
-		}*/
-		Point2f nowcenter = findCircleCenter(map1, map2, mip1, r);
-		double now_distexp = fabs(sqrt(pow(nowcenter.x - x, 2) + pow(nowcenter.y - y, 2)) - r);
-		cout << nowcenter << " ";
-		disexp += now_distexp;
-		center_circle = nowcenter;
-	}
-	cout << "\n";
-	dis = dis / self_segment.size();
-	disexp = disexp / self_segment.size();
-	deviation_of_segment = dis;
-	cout << "|n||| " << dis << " dis segment to ellipse\n";
-	cout << "dis experemental " << disexp << " |||\n";
-	r_circle = r;
+    if (self_segment.empty()) {
+        deviation_of_segment = 100.0;
+        return;
+    }
+
+    const double semiMajor = majorAxisL * 0.5;
+    const double semiMinor = minorAxisL * 0.5;
+    if (!is_valid_positive(semiMajor) || !is_valid_positive(semiMinor)) {
+        deviation_of_segment = 100.0;
+        return;
+    }
+
+    const Point2f majorVector = map1 - center;
+    const Point2f minorVector = mip1 - center;
+
+    const double majorNorm = std::hypot(static_cast<double>(majorVector.x), static_cast<double>(majorVector.y));
+    const double minorNorm = std::hypot(static_cast<double>(minorVector.x), static_cast<double>(minorVector.y));
+    if (!is_valid_positive(majorNorm) || !is_valid_positive(minorNorm)) {
+        deviation_of_segment = 100.0;
+        return;
+    }
+
+    const double ux = majorVector.x / majorNorm;
+    const double uy = majorVector.y / majorNorm;
+    const double vx = minorVector.x / minorNorm;
+    const double vy = minorVector.y / minorNorm;
+
+    double dis = 0.0;
+    for (const Point& p : self_segment) {
+        const double dx = p.x - center.x;
+        const double dy = p.y - center.y;
+        const double localX = std::abs(dx * ux + dy * uy);
+        const double localY = std::abs(dx * vx + dy * vy);
+        dis += std::sqrt(point_to_axis_aligned_ellipse_distance_sq(localX, localY, semiMajor, semiMinor));
+    }
+
+    deviation_of_segment = dis / static_cast<double>(self_segment.size());
 }
 
 Point findCircleCenter(const Point& A, const Point& B, const Point& C, double R) {
-	// Вычисляем коэффициенты системы уравнений
-	double A1 = 2 * (B.x - A.x);
-	double B1 = 2 * (B.y - A.y);
-	double C1 = B.x * B.x + B.y * B.y - A.x * A.x - A.y * A.y;
+    (void)R;
 
-	double A2 = 2 * (C.x - A.x);
-	double B2 = 2 * (C.y - A.y);
-	double C2 = C.x * C.x + C.y * C.y - A.x * A.x - A.y * A.y;
+    const double A1 = 2.0 * (B.x - A.x);
+    const double B1 = 2.0 * (B.y - A.y);
+    const double C1 = B.x * B.x + B.y * B.y - A.x * A.x - A.y * A.y;
 
-	// Решаем систему методом Крамера
-	double det = A1 * B2 - A2 * B1;
+    const double A2 = 2.0 * (C.x - A.x);
+    const double B2 = 2.0 * (C.y - A.y);
+    const double C2 = C.x * C.x + C.y * C.y - A.x * A.x - A.y * A.y;
 
-	double x0 = (C1 * B2 - C2 * B1) / det;
-	double y0 = (A1 * C2 - A2 * C1) / det;
+    const double det = A1 * B2 - A2 * B1;
+    if (std::abs(det) <= kEps) {
+        return Point(0, 0);
+    }
 
-	return Point(x0, y0);
+    const double x0 = (C1 * B2 - C2 * B1) / det;
+    const double y0 = (A1 * C2 - A2 * C1) / det;
+
+    return Point(cvRound(x0), cvRound(y0));
 }
